@@ -86,7 +86,7 @@ Input = jpy.get_type("io.deephaven.integrations.learn.Input")
 Output = jpy.get_type("io.deephaven.integrations.learn.Output")
 
 
-# could be that this should be broken up into two pieces, one to check errors and one to transform input?
+# this is unused for the moment, will rewrite in Java and get rid of this
 def _parse_input(inputs, table):
     """
     Converts the list of user inputs into a new list of inputs with the following rules:
