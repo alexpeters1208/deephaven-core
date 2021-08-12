@@ -19,7 +19,7 @@ class PythonUtilities {
      * @return python function that should be called by a listener.
      * @throws IllegalArgumentException python listener object is not a valid listener.
      */
-static PyObject pyListenerFunc(final PyObject pyObject) {
+    static PyObject pyListenerFunc(final PyObject pyObject) {
         return pyCallable(pyObject, "onUpdate");
     }
 
