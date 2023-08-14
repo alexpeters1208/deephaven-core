@@ -6,65 +6,50 @@
 #' @docType class
 #' @md
 #'
-#' @section Establishing a server connection with `connect`:
-#' Connections to the Deephaven server are established with a call to `connect`,
+#' @section Establishing a server connection with `dhConnect`:
+#' Connections to a Deephaven server are established with a call to `dhConnect`,
 #' which returns a `Client` object responsible for maintaining the connection and
-#' providing an interface to basic server requests. 
-#' * `x`: an R vector, list, or `data.frame`
-#' * `type`: an optional [data type][data-type] for `x`. If omitted, the type
-#'    will be inferred from the data.
-#'
-#' `Array$create()` will return the appropriate subclass of `Array`, such as
-#' `DictionaryArray` when given an R factor.
-#'
-#' To compose a `DictionaryArray` directly, call `DictionaryArray$create()`,
-#' which takes two arguments:
-#' * `x`: an R vector or `Array` of integers for the dictionary indices
-#' * `dict`: an R vector or `Array` of dictionary values (like R factor levels
-#'   but not limited to strings only)
-#' @section Usage:
-#'
-#' ```
-#' a <- Array$create(x)
-#' length(a)
-#'
-#' print(a)
-#' a == a
-#' ```
-#'
+#' providing an interface to basic server requests. Deephaven servers can be created
+#' with many different configurations, so `dhConnect` has the following list of
+#' arguments to support connections to servers with any configuration.
+#' * `target`: A string denoting the URL hosting the server.
+#' * `auth_type`: A string denoting the authentication type, can be `anonymous`,
+#' `basic`, or any custom-built authenticator in the server, such as
+#' `io.deephaven.authentication.psk.PskAuthenticationHandler`. Defaults to `anonymous`.
+#' * `auth_token`: A string denoting the authentication token. When `auth_type`
+#' is `anonymous`, it will be ignored; when `auth_type` is `basic`, it must be
+#' `"user:password"`; when `auth_type` is a custom-built authenticator, it must
+#' conform to the specific requirement of that authenticator.
+#' * `session_type`: A string denoting the session type supported on the server.
+#' Currently, `python` and `groovy` are supported. Defaults to `python`.
+#' * `use_tls`: Whether or not to use a TLS connection.  Defaults to `FALSE`.
+#' * `tls_root_certs`: PEM encoded root certificates to use for TLS connection,
+#' or `""` to use system defaults. Only used if `use_tls == TRUE`. Defaults to system defaults.
+#' * `int_options`: List of name-value pairs for int-valued options to the underlying
+#' grpc channel creation.  Defaults to an empty list, which implies not using any channel options.
+#' * `string_options`: List of name-value pairs for string-valued options to the underlying
+#' grpc channel creation.  Defaults to an empty list, which implies not using any channel options.
+#' * `extra_headers`: List of name-value pairs for additional headers and values
+#' to add to server requests. Defaults to an empty list, which implies not using any extra headers.
+#' 
 #' @section Methods:
+#' 
+#' Once a server connection is established, the `Client` class supports the
+#' following list of methods for facilitating server requests.
 #'
-#' - `$IsNull(i)`: Return true if value at index is null. Does not boundscheck
-#' - `$IsValid(i)`: Return true if value at index is valid. Does not boundscheck
-#' - `$length()`: Size in the number of elements this array contains
-#' - `$nbytes()`: Total number of bytes consumed by the elements of the array
-#' - `$offset`: A relative position into another array's data, to enable zero-copy slicing
-#' - `$null_count`: The number of null entries in the array
-#' - `$type`: logical type of data
-#' - `$type_id()`: type id
-#' - `$Equals(other)` : is this array equal to `other`
-#' - `$ApproxEquals(other)` :
-#' - `$Diff(other)` : return a string expressing the difference between two arrays
-#' - `$data()`: return the underlying [ArrayData][ArrayData]
-#' - `$as_vector()`: convert to an R vector
-#' - `$ToString()`: string representation of the array
-#' - `$Slice(offset, length = NULL)`: Construct a zero-copy slice of the array
-#'    with the indicated offset and length. If length is `NULL`, the slice goes
-#'    until the end of the array.
-#' - `$Take(i)`: return an `Array` with values at positions given by integers
-#'    (R vector or Array Array) `i`.
-#' - `$Filter(i, keep_na = TRUE)`: return an `Array` with values at positions where logical
-#'    vector (or Arrow boolean Array) `i` is `TRUE`.
-#' - `$SortIndices(descending = FALSE)`: return an `Array` of integer positions that can be
-#'    used to rearrange the `Array` in ascending or descending order
-#' - `$RangeEquals(other, start_idx, end_idx, other_start_idx)` :
-#' - `$cast(target_type, safe = TRUE, options = cast_options(safe))`: Alter the
-#'    data in the array to change its type.
-#' - `$View(type)`: Construct a zero-copy view of this array with the given type.
-#' - `$Validate()` : Perform any validation checks to determine obvious inconsistencies
-#'    within the array's internal data. This can be an expensive check, potentially `O(length)`
+#' - `open_table(client, name)`: Opens a table named `"name"` on the server, if
+#' it exists. Returns a `TableHandle`.
+#' - `empty_table(client, size)`: Creates an empty table on the server with no
+#' columns and `size` rows. Thus, `size` must be a non-negative integer. Returns a `TableHandle`.
+#' - `time_table(client, period, start_time)`:
+#' - `as_dh_table(client, table_object)`:
+#' - `run_script(client, script)`:
+#' - `close(client)`:
+#' 
+#' When a `Client` instance is no longer in use, it should be closed with a call
+#' to `close(client_instance)`.
 #'
-#' @rdname array-class
+#' @rdname Client-class
 #' @examples
 #' my_array <- Array$create(1:10)
 #' my_array$type
