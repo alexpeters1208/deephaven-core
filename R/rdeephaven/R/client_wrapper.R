@@ -1,3 +1,76 @@
+#' @title The Deephaven Client
+#' @description The Deephaven Client class is responsible for establishing and maintaining
+#' a connection to a running Deephaven server and facilitating basic server requests.
+#' @usage NULL
+#' @format NULL
+#' @docType class
+#' @md
+#'
+#' @section Establishing a server connection with `dhConnect`:
+#' Connections to a Deephaven server are established with a call to `dhConnect`,
+#' which returns a `Client` object responsible for maintaining the connection and
+#' providing an interface to basic server requests. Deephaven servers can be created
+#' with many different configurations, so `dhConnect` has the following list of
+#' arguments to support connections to servers with any configuration.
+#' * `target`: A string denoting the URL hosting the server.
+#' * `auth_type`: A string denoting the authentication type, can be `anonymous`,
+#' `basic`, or any custom-built authenticator in the server, such as
+#' `io.deephaven.authentication.psk.PskAuthenticationHandler`. Defaults to `anonymous`.
+#' * `auth_token`: A string denoting the authentication token. When `auth_type`
+#' is `anonymous`, it will be ignored; when `auth_type` is `basic`, it must be
+#' `"user:password"`; when `auth_type` is a custom-built authenticator, it must
+#' conform to the specific requirement of that authenticator.
+#' * `session_type`: A string denoting the session type supported on the server.
+#' Currently, `python` and `groovy` are supported. Defaults to `python`.
+#' * `use_tls`: Whether or not to use a TLS connection.  Defaults to `FALSE`.
+#' * `tls_root_certs`: PEM encoded root certificates to use for TLS connection,
+#' or `""` to use system defaults. Only used if `use_tls == TRUE`. Defaults to system defaults.
+#' * `int_options`: List of name-value pairs for int-valued options to the underlying
+#' grpc channel creation.  Defaults to an empty list, which implies not using any channel options.
+#' * `string_options`: List of name-value pairs for string-valued options to the underlying
+#' grpc channel creation.  Defaults to an empty list, which implies not using any channel options.
+#' * `extra_headers`: List of name-value pairs for additional headers and values
+#' to add to server requests. Defaults to an empty list, which implies not using any extra headers.
+#' 
+#' @section Methods:
+#' 
+#' Once a server connection is established, the `Client` class supports the
+#' following list of methods for facilitating server requests.
+#'
+#' - `open_table(client, name)`: Opens a table named `"name"` on the server, if
+#' it exists. Returns a `TableHandle`.
+#' - `empty_table(client, size)`: Creates an empty table on the server with no
+#' columns and `size` rows. Thus, `size` must be a non-negative integer. Returns a `TableHandle`.
+#' - `time_table(client, period, start_time)`:
+#' - `as_dh_table(client, table_object)`:
+#' - `run_script(client, script)`:
+#' - `close(client)`:
+#' 
+#' When a `Client` instance is no longer in use, it should be closed with a call
+#' to `close(client_instance)`.
+#'
+#' @rdname Client-class
+#' @examples
+#' my_array <- Array$create(1:10)
+#' my_array$type
+#' my_array$cast(int8())
+#'
+#' # Check if value is null; zero-indexed
+#' na_array <- Array$create(c(1:5, NA))
+#' na_array$IsNull(0)
+#' na_array$IsNull(5)
+#' na_array$IsValid(5)
+#' na_array$null_count
+#'
+#' # zero-copy slicing; the offset of the new Array will be the same as the index passed to $Slice
+#' new_array <- na_array$Slice(5)
+#' new_array$offset
+#'
+#' # Compare 2 arrays
+#' na_array2 <- na_array
+#' na_array2 == na_array # element-wise comparison
+#' na_array2$Equals(na_array) # overall comparison
+
 #' @export
 setClass(
   "Client",
