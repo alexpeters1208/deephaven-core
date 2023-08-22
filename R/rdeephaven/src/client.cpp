@@ -21,11 +21,11 @@
 #include <Rcpp.h>
 
 using deephaven::dhcore::utility::Base64Encode;
+using deephaven::client::ClientOptions;
+using deephaven::client::Aggregate;
 
 // forward declaration of classes
-class AggregateWrapper;
 class TableHandleWrapper;
-class ClientOptionsWrapper;
 class ClientWrapper;
 
 // forward declaration of conversion functions
@@ -35,24 +35,13 @@ std::vector<deephaven::client::TableHandle> convertRcppListToVectorOfTypeTableHa
 
 // ######################### DH WRAPPERS #########################
 
-class AggregateWrapper {
-public:
-    AggregateWrapper();
-    AggregateWrapper(deephaven::client::Aggregate aggregate) :
-            internal_aggregation(std::move(aggregate)) {}
-private:
-    deephaven::client::Aggregate internal_aggregation;
-    friend TableHandleWrapper;
-    friend std::vector<deephaven::client::Aggregate> convertRcppListToVectorOfTypeAggregate(Rcpp::List rcpp_list);
-};
-
 std::vector<deephaven::client::Aggregate> convertRcppListToVectorOfTypeAggregate(Rcpp::List rcpp_list) {
     std::vector<deephaven::client::Aggregate> converted_list;
     converted_list.reserve(rcpp_list.size());
 
     for(int i = 0; i < rcpp_list.size(); i++) {
         Rcpp::Environment rcpp_list_element = rcpp_list[i];
-        Rcpp::XPtr<AggregateWrapper> xptr(rcpp_list_element.get(".pointer"));
+        Rcpp::XPtr<Aggregate> xptr(rcpp_list_element.get(".pointer"));
         deephaven::client::Aggregate internal_aggregation = xptr->internal_aggregation;
         converted_list.push_back(internal_aggregation);
     }
@@ -60,56 +49,56 @@ std::vector<deephaven::client::Aggregate> convertRcppListToVectorOfTypeAggregate
     return converted_list;
 }
 
-AggregateWrapper* INTERNAL_agg_min(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Min(columnSpecs));
+Aggregate* INTERNAL_agg_min(std::vector<std::string> columnSpecs) {
+    return new Aggregate::Min(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_max(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Max(columnSpecs));
+Aggregate* INTERNAL_agg_max(std::vector<std::string> columnSpecs) {
+    return new Aggregate::Max(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_first(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::First(columnSpecs));
+Aggregate* INTERNAL_agg_first(std::vector<std::string> columnSpecs) {
+    return new Aggregate::First(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_last(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Last(columnSpecs));
+Aggregate* INTERNAL_agg_last(std::vector<std::string> columnSpecs) {
+    return new Aggregate::Last(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_sum(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Sum(columnSpecs));
+Aggregate* INTERNAL_agg_sum(std::vector<std::string> columnSpecs) {
+    return new Aggregate::Sum(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_absSum(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::AbsSum(columnSpecs));
+Aggregate* INTERNAL_agg_absSum(std::vector<std::string> columnSpecs) {
+    return new Aggregate::AbsSum(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_avg(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Avg(columnSpecs));
+Aggregate* INTERNAL_agg_avg(std::vector<std::string> columnSpecs) {
+    return new Aggregate::Avg(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_wAvg(std::string weightColumn, std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::WAvg(weightColumn, columnSpecs));
+Aggregate* INTERNAL_agg_wAvg(std::string weightColumn, std::vector<std::string> columnSpecs) {
+    return new Aggregate::WAvg(weightColumn, columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_median(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Med(columnSpecs));
+Aggregate* INTERNAL_agg_median(std::vector<std::string> columnSpecs) {
+    return Aggregate::Med(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_var(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Var(columnSpecs));
+Aggregate* INTERNAL_agg_var(std::vector<std::string> columnSpecs) {
+    return new Aggregate::Var(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_std(std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Std(columnSpecs));
+Aggregate* INTERNAL_agg_std(std::vector<std::string> columnSpecs) {
+    return new Aggregate::Std(columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_percentile(double percentile, std::vector<std::string> columnSpecs) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Pct(percentile, false, columnSpecs));
+Aggregate* INTERNAL_agg_percentile(double percentile, std::vector<std::string> columnSpecs) {
+    return new Aggregate::Pct(percentile, false, columnSpecs);
 }
 
-AggregateWrapper* INTERNAL_agg_count(std::string columnSpec) {
-    return new AggregateWrapper(deephaven::client::Aggregate::Count(columnSpec));
+Aggregate* INTERNAL_agg_count(std::string columnSpec) {
+    return new Aggregate::Count(columnSpec);
 }
 
 
@@ -318,60 +307,11 @@ std::vector<deephaven::client::TableHandle> convertRcppListToVectorOfTypeTableHa
 }
 
 
-class ClientOptionsWrapper {
-public:
-
-    ClientOptionsWrapper() :
-            internal_options(std::make_shared<deephaven::client::ClientOptions>()) {}
-
-    void SetDefaultAuthentication() {
-        internal_options->SetDefaultAuthentication();
-    }
-
-    void SetBasicAuthentication(const std::string &authentication_token) {
-        const std::string authentication_token_base64 = Base64Encode(authentication_token);
-        internal_options->SetCustomAuthentication("Basic", authentication_token_base64);
-    }
-
-    void SetCustomAuthentication(const std::string &authentication_type, const std::string &authentication_token) {
-        internal_options->SetCustomAuthentication(authentication_type, authentication_token);
-    }
-
-    void SetSessionType(const std::string &sessionType) {
-        internal_options->SetSessionType(sessionType);
-    }
-
-    void SetUseTls(bool useTls) {
-        internal_options->SetUseTls(useTls);
-    }
-
-    void SetTlsRootCerts(std::string tlsRootCerts) {
-        internal_options->SetTlsRootCerts(tlsRootCerts);
-    }
-
-    void AddIntOption(std::string opt, int val) {
-        internal_options->AddIntOption(opt, val);
-    }
-
-    void AddStringOption(std::string opt, std::string val) {
-        internal_options->AddStringOption(opt, val);
-    }
-
-    void AddExtraHeader(std::string header_name, std::string header_value) {
-        internal_options->AddExtraHeader(header_name, header_value);
-    }
-
-private:
-    std::shared_ptr<deephaven::client::ClientOptions> internal_options;
-    friend ClientWrapper;
-};
-
-
 class ClientWrapper {
 public:
 
-    ClientWrapper(std::string target, const ClientOptionsWrapper &client_options) :
-            internal_client(deephaven::client::Client::Connect(target, *client_options.internal_options)) {}
+    ClientWrapper(std::string target, const ClientOptions &client_options) :
+            internal_client(deephaven::client::Client::Connect(target, client_options)) {}
 
     TableHandleWrapper* OpenTable(std::string tableName) {
         return new TableHandleWrapper(internal_tbl_hdl_mngr.FetchTable(tableName));
@@ -468,14 +408,14 @@ private:
 
 using namespace Rcpp;
 
-RCPP_EXPOSED_CLASS(ClientOptionsWrapper)
+RCPP_EXPOSED_CLASS(Aggregate)
+RCPP_EXPOSED_CLASS(ClientOptions)
+
 RCPP_EXPOSED_CLASS(TableHandleWrapper)
-RCPP_EXPOSED_CLASS(AggregateWrapper)
-RCPP_EXPOSED_CLASS(SortPairWrapper)
 RCPP_EXPOSED_CLASS(ArrowArrayStream)
 
 RCPP_MODULE(DeephavenInternalModule) {
-    class_<AggregateWrapper>("INTERNAL_Aggregate")
+    class_<Aggregate>("INTERNAL_Aggregate")
     ;
     function("INTERNAL_agg_first", &INTERNAL_agg_first);
     function("INTERNAL_agg_last", &INTERNAL_agg_last);
@@ -537,22 +477,22 @@ RCPP_MODULE(DeephavenInternalModule) {
     ;
 
 
-    class_<ClientOptionsWrapper>("INTERNAL_ClientOptions")
+    class_<ClientOptions>("INTERNAL_ClientOptions")
     .constructor()
-    .method("set_default_authentication", &ClientOptionsWrapper::SetDefaultAuthentication)
-    .method("set_basic_authentication", &ClientOptionsWrapper::SetBasicAuthentication)
-    .method("set_custom_authentication", &ClientOptionsWrapper::SetCustomAuthentication)
-    .method("set_session_type", &ClientOptionsWrapper::SetSessionType)
-    .method("set_use_tls", &ClientOptionsWrapper::SetUseTls)
-    .method("set_tls_root_certs", &ClientOptionsWrapper::SetTlsRootCerts)
-    .method("add_int_option", &ClientOptionsWrapper::AddIntOption)
-    .method("add_string_option", &ClientOptionsWrapper::AddStringOption)
-    .method("add_extra_header", &ClientOptionsWrapper::AddExtraHeader)
+    .method("set_default_authentication", &ClientOptions::SetDefaultAuthentication)
+    .method("set_basic_authentication", &ClientOptions::SetBasicAuthentication)
+    .method("set_custom_authentication", &ClientOptions::SetCustomAuthentication)
+    .method("set_session_type", &ClientOptions::SetSessionType)
+    .method("set_use_tls", &ClientOptions::SetUseTls)
+    .method("set_tls_root_certs", &ClientOptions::SetTlsRootCerts)
+    .method("add_int_option", &ClientOptions::AddIntOption)
+    .method("add_string_option", &ClientOptions::AddStringOption)
+    .method("add_extra_header", &ClientOptions::AddExtraHeader)
     ;
 
 
     class_<ClientWrapper>("INTERNAL_Client")
-    .constructor<std::string, const ClientOptionsWrapper&>()
+    .constructor<std::string, const ClientOptions&>()
     .method("open_table", &ClientWrapper::OpenTable)
     .method("empty_table", &ClientWrapper::EmptyTable)
     .method("time_table", &ClientWrapper::TimeTable)
@@ -563,4 +503,5 @@ RCPP_MODULE(DeephavenInternalModule) {
     .method("close", &ClientWrapper::Close)
     ;
 
+    function("INTERNAL_base64_encode", &deephaven::dhcore::utility::Base64Encode);
 }
