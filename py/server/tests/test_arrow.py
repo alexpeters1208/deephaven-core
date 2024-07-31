@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+# Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
 #
 import os
 import unittest
@@ -17,6 +17,7 @@ from deephaven.column import byte_col, char_col, short_col, int_col, long_col, f
     string_col, datetime_col, bool_col
 from deephaven.table import Table
 from tests.testbase import BaseTestCase
+
 
 class ArrowTestCase(BaseTestCase):
     test_table: Table
@@ -102,17 +103,25 @@ class ArrowTestCase(BaseTestCase):
                 pa.array([2 ** 16 - 1, 0]),
             ]
 
-    @unittest.skip("Not correctly converted by DH, marked as unsupported now.")
     def test_arrow_types_time(self):
         pa_types = [
             pa.time64('ns'),
-            pa.date32(),
-            pa.timestamp('ns', tz='MST'),
+            pa.date64(),
         ]
 
         pa_data = [
             pa.array([1_000_001, 1_000_002]),
             pa.array([datetime(2022, 12, 7), datetime(2022, 12, 30)]),
+        ]
+        self.verify_type_conversion(pa_types=pa_types, pa_data=pa_data)
+
+    @unittest.skip("Not correctly converted by DH, marked as unsupported now.")
+    def test_arrow_extra_time_types(self):
+        pa_types = [
+            pa.timestamp('ns', tz='MST'),
+        ]
+
+        pa_data = [
             pa.array([pd.Timestamp('2017-01-01T12:01:01', tz='UTC'),
                       pd.Timestamp('2017-01-01T11:01:01', tz='Europe/Paris')]),
         ]

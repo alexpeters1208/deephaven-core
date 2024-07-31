@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.server.session;
 
 import com.github.f4b6a3.uuid.UuidCreator;
@@ -565,6 +565,9 @@ public class SessionState {
 
         /** used to detect when this object is ready for export (is visible for atomic int field updater) */
         private volatile int dependentCount = -1;
+        /** our first parent that was already released prior to having dependencies set if one exists */
+        private ExportObject<?> alreadyDeadParent;
+
         @SuppressWarnings("unchecked")
         private static final AtomicIntegerFieldUpdater<ExportObject<?>> DEPENDENT_COUNT_UPDATER =
                 AtomicIntegerFieldUpdater.newUpdater((Class<ExportObject<?>>) (Class<?>) ExportObject.class,
@@ -623,7 +626,10 @@ public class SessionState {
             }
         }
 
-        private boolean isNonExport() {
+        /**
+         * @return if this export is a session-less non-export
+         */
+        public boolean isNonExport() {
             return exportId == NON_EXPORT_ID;
         }
 
@@ -648,7 +654,14 @@ public class SessionState {
 
             this.parents = parents;
             dependentCount = parents.size();
-            parents.stream().filter(Objects::nonNull).forEach(this::tryManage);
+            for (final ExportObject<?> parent : parents) {
+                if (parent != null && !tryManage(parent)) {
+                    // we've failed; let's cleanup already managed parents
+                    forceReferenceCountToZero();
+                    alreadyDeadParent = parent;
+                    break;
+                }
+            }
 
             if (log.isDebugEnabled()) {
                 final Exception e = new RuntimeException();
@@ -678,18 +691,24 @@ public class SessionState {
                 throw new IllegalStateException("export object can only be defined once");
             }
             hasHadWorkSet = true;
-
             if (queryPerformanceRecorder != null && queryPerformanceRecorder.getState() == QueryState.RUNNING) {
                 // transfer ownership of the qpr to the export before it can be resumed by the scheduler
                 queryPerformanceRecorder.suspendQuery();
             }
             this.requiresSerialQueue = requiresSerialQueue;
 
+            // we defer this type of failure until setWork for consistency in error handling
+            if (alreadyDeadParent != null) {
+                onDependencyFailure(alreadyDeadParent);
+                alreadyDeadParent = null;
+            }
+
             if (isExportStateTerminal(state)) {
                 // The following scenarios cause us to get into this state:
                 // - this export object was released/cancelled
                 // - the session expiration propagated to this export object
-                // Note that already failed dependencies will be handled in the onResolveOne method below.
+                // - a parent export was released/dead prior to `setDependencies`
+                // Note that failed dependencies will be handled in the onResolveOne method below.
 
                 // since this is the first we know of the errorHandler, it could not have been invoked yet
                 if (errorHandler != null) {
@@ -891,44 +910,12 @@ public class SessionState {
                 return;
             }
 
-            // is this a cascading failure?
-            if (parent != null && isExportStateTerminal(parent.state)) {
-                synchronized (this) {
-                    errorId = parent.errorId;
-                    if (parent.caughtException instanceof StatusRuntimeException) {
-                        caughtException = parent.caughtException;
-                    }
-                    ExportNotification.State terminalState = ExportNotification.State.DEPENDENCY_FAILED;
-
-                    if (errorId == null) {
-                        final String errorDetails;
-                        switch (parent.state) {
-                            case RELEASED:
-                                terminalState = ExportNotification.State.DEPENDENCY_RELEASED;
-                                errorDetails = "dependency released by user.";
-                                break;
-                            case CANCELLED:
-                                terminalState = ExportNotification.State.DEPENDENCY_CANCELLED;
-                                errorDetails = "dependency cancelled by user.";
-                                break;
-                            default:
-                                // Note: the other error states should have non-null errorId
-                                errorDetails = "dependency does not have its own error defined " +
-                                        "and is in an unexpected state: " + parent.state;
-                                break;
-                        }
-
-                        maybeAssignErrorId();
-                        failedDependencyLogIdentity = parent.logIdentity;
-                        if (!(caughtException instanceof StatusRuntimeException)) {
-                            log.error().append("Internal Error '").append(errorId).append("' ").append(errorDetails)
-                                    .endl();
-                        }
-                    }
-
-                    setState(terminalState);
-                    return;
-                }
+            // Is this a cascading failure? Note that we manage the parents in `setDependencies` which
+            // keeps the parent results live until this child been exported. This means that the parent is allowed to
+            // be in a RELEASED state, but is not allowed to be in a failure state.
+            if (parent != null && isExportStateFailure(parent.state)) {
+                onDependencyFailure(parent);
+                return;
             }
 
             final int newDepCount = DEPENDENT_COUNT_UPDATER.decrementAndGet(this);
@@ -1045,6 +1032,42 @@ public class SessionState {
             }
         }
 
+        private synchronized void onDependencyFailure(final ExportObject<?> parent) {
+            errorId = parent.errorId;
+            if (parent.caughtException instanceof StatusRuntimeException) {
+                caughtException = parent.caughtException;
+            }
+            ExportNotification.State terminalState = ExportNotification.State.DEPENDENCY_FAILED;
+
+            if (errorId == null) {
+                final String errorDetails;
+                switch (parent.state) {
+                    case RELEASED:
+                        terminalState = ExportNotification.State.DEPENDENCY_RELEASED;
+                        errorDetails = "dependency released by user.";
+                        break;
+                    case CANCELLED:
+                        terminalState = ExportNotification.State.DEPENDENCY_CANCELLED;
+                        errorDetails = "dependency cancelled by user.";
+                        break;
+                    default:
+                        // Note: the other error states should have non-null errorId
+                        errorDetails = "dependency does not have its own error defined " +
+                                "and is in an unexpected state: " + parent.state;
+                        break;
+                }
+
+                maybeAssignErrorId();
+                failedDependencyLogIdentity = parent.logIdentity;
+                if (!(caughtException instanceof StatusRuntimeException)) {
+                    log.error().append("Internal Error '").append(errorId).append("' ").append(errorDetails)
+                            .endl();
+                }
+            }
+
+            setState(terminalState);
+        }
+
         /**
          * Sets the final result for this export.
          *
@@ -1118,6 +1141,7 @@ public class SessionState {
             if (!(caughtException instanceof StatusRuntimeException)) {
                 caughtException = null;
             }
+            queryPerformanceRecorder = null;
         }
 
         /**
@@ -1300,6 +1324,40 @@ public class SessionState {
         void onError(final StatusRuntimeException notification);
     }
 
+    /**
+     * Convert an {@link ExportErrorGrpcHandler} to an {@link ExportErrorHandler}.
+     * <p>
+     * gRPC's error handlers are designed to consume {@link StatusRuntimeException} objects. Exports can fail for a
+     * variety of reasons, and the {@link ExportErrorHandler} is designed to richly communicate export failures. This
+     * method is the glue between the two error handling APIs; enabling export error propagation to gRPC clients.
+     *
+     * @param errorHandler the gRPC specific error handler
+     * @return the generalized error handler
+     */
+    public static SessionState.ExportErrorHandler toErrorHandler(final ExportErrorGrpcHandler errorHandler) {
+        return (resultState, errorContext, cause, dependentExportId) -> {
+            if (cause instanceof StatusRuntimeException) {
+                errorHandler.onError((StatusRuntimeException) cause);
+                return;
+            }
+
+            final String dependentStr = dependentExportId == null ? ""
+                    : (" (related parent export id: " + dependentExportId + ")");
+            if (cause == null) {
+                if (resultState == ExportNotification.State.CANCELLED) {
+                    errorHandler.onError(Exceptions.statusRuntimeException(Code.CANCELLED,
+                            "Export is cancelled" + dependentStr));
+                } else {
+                    errorHandler.onError(Exceptions.statusRuntimeException(Code.FAILED_PRECONDITION,
+                            "Export in state " + resultState + dependentStr));
+                }
+            } else {
+                errorHandler.onError(Exceptions.statusRuntimeException(Code.FAILED_PRECONDITION,
+                        "Details Logged w/ID '" + errorContext + "'" + dependentStr));
+            }
+        };
+    }
+
     public class ExportBuilder<T> {
         private final int exportId;
         private final ExportObject<T> export;
@@ -1395,27 +1453,7 @@ public class SessionState {
          * @return this builder
          */
         public ExportBuilder<T> onErrorHandler(final ExportErrorGrpcHandler errorHandler) {
-            return onError(((resultState, errorContext, cause, dependentExportId) -> {
-                if (cause instanceof StatusRuntimeException) {
-                    errorHandler.onError((StatusRuntimeException) cause);
-                    return;
-                }
-
-                final String dependentStr = dependentExportId == null ? ""
-                        : (" (related parent export id: " + dependentExportId + ")");
-                if (cause == null) {
-                    if (resultState == ExportNotification.State.CANCELLED) {
-                        errorHandler.onError(Exceptions.statusRuntimeException(Code.CANCELLED,
-                                "Export is cancelled" + dependentStr));
-                    } else {
-                        errorHandler.onError(Exceptions.statusRuntimeException(Code.FAILED_PRECONDITION,
-                                "Export in state " + resultState + dependentStr));
-                    }
-                } else {
-                    errorHandler.onError(Exceptions.statusRuntimeException(Code.FAILED_PRECONDITION,
-                            "Details Logged w/ID '" + errorContext + "'" + dependentStr));
-                }
-            }));
+            return onError(toErrorHandler(errorHandler));
         }
 
         /**
@@ -1429,7 +1467,7 @@ public class SessionState {
          * @param streamObserver the streamObserver to be notified of any error
          * @return this builder
          */
-        public ExportBuilder<T> onError(StreamObserver<?> streamObserver) {
+        public ExportBuilder<T> onError(final StreamObserver<?> streamObserver) {
             return onErrorHandler(statusRuntimeException -> {
                 safelyError(streamObserver, statusRuntimeException);
             });

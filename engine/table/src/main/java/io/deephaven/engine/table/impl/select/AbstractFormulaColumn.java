@@ -1,18 +1,19 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.select;
 
+import io.deephaven.UncheckedDeephavenException;
 import io.deephaven.base.verify.Require;
 import io.deephaven.configuration.Configuration;
 import io.deephaven.engine.table.*;
-import io.deephaven.engine.context.ExecutionContext;
-import io.deephaven.engine.context.QueryScope;
 import io.deephaven.engine.context.QueryScopeParam;
 import io.deephaven.engine.table.impl.BaseTable;
 import io.deephaven.engine.table.impl.MatchPair;
+import io.deephaven.engine.table.impl.QueryCompilerRequestProcessor;
+import io.deephaven.util.CompletionStageFuture;
+import io.deephaven.engine.table.vectors.*;
 import io.deephaven.vector.Vector;
-import io.deephaven.engine.table.impl.vector.*;
 import io.deephaven.engine.table.impl.select.formula.*;
 import io.deephaven.engine.table.impl.sources.*;
 import io.deephaven.engine.rowset.RowSet;
@@ -20,9 +21,14 @@ import io.deephaven.engine.rowset.TrackingRowSet;
 import io.deephaven.internal.log.LoggerFactory;
 import io.deephaven.io.logger.Logger;
 import io.deephaven.api.util.NameValidator;
+import org.apache.commons.text.StringEscapeUtils;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 /**
@@ -36,11 +42,12 @@ public abstract class AbstractFormulaColumn implements FormulaColumn {
 
 
     protected String formulaString;
+    protected final String originalFormulaString;
     protected List<String> usedColumns;
 
     @NotNull
     protected final String columnName;
-    protected FormulaFactory formulaFactory;
+    protected Future<FormulaFactory> formulaFactoryFuture;
     private Formula formula;
     protected QueryScopeParam<?>[] params;
     protected Map<String, ? extends ColumnSource<?>> columnSources;
@@ -63,12 +70,18 @@ public abstract class AbstractFormulaColumn implements FormulaColumn {
      */
     protected AbstractFormulaColumn(String columnName, String formulaString) {
         this.formulaString = Require.neqNull(formulaString, "formulaString");
+        this.originalFormulaString = formulaString;
         this.columnName = NameValidator.validateColumnName(columnName);
     }
 
     @Override
     public Class<?> getReturnedType() {
         return returnedType;
+    }
+
+    @Override
+    public Class<?> getReturnedComponentType() {
+        return returnedType.getComponentType();
     }
 
     @Override
@@ -81,7 +94,8 @@ public abstract class AbstractFormulaColumn implements FormulaColumn {
         if (usedColumns != null) {
             return usedColumns;
         }
-        return initDef(extractDefinitions(columnsOfInterest));
+
+        return initDef(extractDefinitions(columnsOfInterest), QueryCompilerRequestProcessor.immediate());
     }
 
     @Override
@@ -92,9 +106,9 @@ public abstract class AbstractFormulaColumn implements FormulaColumn {
         }
         if (sourceTable.isRefreshing() && !ALLOW_UNSAFE_REFRESHING_FORMULAS) {
             // note that constant offset array accesss does not use i/ii or end up in usedColumnArrays
-            boolean isUnsafe = !sourceTable.isAppendOnly() && (usesI || usesII);
-            isUnsafe |= !sourceTable.isAddOnly() && usesK;
-            isUnsafe |= !usedColumnArrays.isEmpty();
+            boolean isUnsafe = (usesI || usesII) && !sourceTable.isAppendOnly() && !sourceTable.isBlink();
+            isUnsafe |= usesK && !sourceTable.isAddOnly() && !sourceTable.isBlink();
+            isUnsafe |= !usedColumnArrays.isEmpty() && !sourceTable.isBlink();
             if (isUnsafe) {
                 throw new IllegalArgumentException("Formula '" + formulaString + "' uses i, ii, k, or column array " +
                         "variables, and is not safe to refresh. Note that some usages, such as on an append-only " +
@@ -104,15 +118,12 @@ public abstract class AbstractFormulaColumn implements FormulaColumn {
         }
     }
 
-    protected void applyUsedVariables(Map<String, ColumnDefinition<?>> columnDefinitionMap, Set<String> variablesUsed) {
+    protected void applyUsedVariables(
+            @NotNull final Map<String, ColumnDefinition<?>> columnDefinitionMap,
+            @NotNull final Set<String> variablesUsed,
+            @NotNull final Map<String, Object> possibleParams) {
         // the column definition map passed in is being mutated by the caller, so we need to make a copy
         columnDefinitions = Map.copyOf(columnDefinitionMap);
-
-        final Map<String, QueryScopeParam<?>> possibleParams = new HashMap<>();
-        final QueryScope queryScope = ExecutionContext.getContext().getQueryScope();
-        for (QueryScopeParam<?> param : queryScope.getParams(queryScope.getParamNames())) {
-            possibleParams.put(param.getName(), param);
-        }
 
         final List<QueryScopeParam<?>> paramsList = new ArrayList<>();
         usedColumns = new ArrayList<>();
@@ -132,16 +143,16 @@ public abstract class AbstractFormulaColumn implements FormulaColumn {
                 if (variable.endsWith(COLUMN_SUFFIX) && columnDefinitions.get(strippedColumnName) != null) {
                     usedColumnArrays.add(strippedColumnName);
                 } else if (possibleParams.containsKey(variable)) {
-                    paramsList.add(possibleParams.get(variable));
+                    paramsList.add(new QueryScopeParam<>(variable, possibleParams.get(variable)));
                 }
             }
         }
 
-        params = paramsList.toArray(QueryScopeParam.ZERO_LENGTH_PARAM_ARRAY);
+        params = paramsList.toArray(QueryScopeParam[]::new);
     }
 
     protected void onCopy(final AbstractFormulaColumn copy) {
-        copy.formulaFactory = formulaFactory;
+        copy.formulaFactoryFuture = formulaFactoryFuture;
         copy.columnDefinitions = columnDefinitions;
         copy.params = params;
         copy.usedColumns = usedColumns;
@@ -225,7 +236,15 @@ public abstract class AbstractFormulaColumn implements FormulaColumn {
     private Formula getFormula(boolean initLazyMap,
             Map<String, ? extends ColumnSource<?>> columnsToData,
             QueryScopeParam<?>... params) {
-        formula = formulaFactory.createFormula(rowSet, initLazyMap, columnsToData, params);
+        try {
+            // the future must already be completed or else it is an error
+            formula = formulaFactoryFuture.get(0, TimeUnit.SECONDS).createFormula(
+                    StringEscapeUtils.escapeJava(columnName), rowSet, initLazyMap, columnsToData, params);
+        } catch (InterruptedException | TimeoutException e) {
+            throw new IllegalStateException("Formula factory not already compiled!");
+        } catch (ExecutionException e) {
+            throw new UncheckedDeephavenException("Error creating formula for " + columnName, e.getCause());
+        }
         return formula;
     }
 
@@ -259,26 +278,28 @@ public abstract class AbstractFormulaColumn implements FormulaColumn {
         return new ObjectVectorColumnWrapper<>((ColumnSource<Object>) cs, rowSet);
     }
 
-    protected FormulaFactory createKernelFormulaFactory(final FormulaKernelFactory formulaKernelFactory) {
+    protected Future<FormulaFactory> createKernelFormulaFactory(
+            @NotNull final CompletionStageFuture<FormulaKernelFactory> formulaKernelFactoryFuture) {
         final FormulaSourceDescriptor sd = getSourceDescriptor();
 
-        return (rowSet, lazy, columnsToData, params) -> {
-            // Maybe warn that we ignore "lazy". By the way, "lazy" is the wrong term anyway. "lazy" doesn't mean
-            // "cached", which is how we are using it.
-            final Map<String, ColumnSource<?>> netColumnSources = new HashMap<>();
-            for (final String columnName : sd.sources) {
-                final ColumnSource<?> columnSourceToUse = columnsToData.get(columnName);
-                netColumnSources.put(columnName, columnSourceToUse);
-            }
+        return formulaKernelFactoryFuture
+                .thenApply(formulaKernelFactory -> (columnName, rowSet, lazy, columnsToData, params) -> {
+                    // Maybe warn that we ignore "lazy". By the way, "lazy" is the wrong term anyway. "lazy" doesn't
+                    // mean "cached", which is how we are using it.
+                    final Map<String, ColumnSource<?>> netColumnSources = new HashMap<>();
+                    for (final String sourceColumnName : sd.sources) {
+                        final ColumnSource<?> columnSourceToUse = columnsToData.get(sourceColumnName);
+                        netColumnSources.put(sourceColumnName, columnSourceToUse);
+                    }
 
-            final Vector<?>[] vectors = new Vector[sd.arrays.length];
-            for (int ii = 0; ii < sd.arrays.length; ++ii) {
-                final ColumnSource<?> cs = columnsToData.get(sd.arrays[ii]);
-                vectors[ii] = makeAppropriateVectorWrapper(cs, rowSet);
-            }
-            final FormulaKernel fk = formulaKernelFactory.createInstance(vectors, params);
-            return new FormulaKernelAdapter(rowSet, sd, netColumnSources, fk);
-        };
+                    final Vector<?>[] vectors = new Vector[sd.arrays.length];
+                    for (int ii = 0; ii < sd.arrays.length; ++ii) {
+                        final ColumnSource<?> cs = columnsToData.get(sd.arrays[ii]);
+                        vectors[ii] = makeAppropriateVectorWrapper(cs, rowSet);
+                    }
+                    final FormulaKernel fk = formulaKernelFactory.createInstance(vectors, params);
+                    return new FormulaKernelAdapter(rowSet, sd, netColumnSources, fk);
+                });
     }
 
     protected abstract FormulaSourceDescriptor getSourceDescriptor();

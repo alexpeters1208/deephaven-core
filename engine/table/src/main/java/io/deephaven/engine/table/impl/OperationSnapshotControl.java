@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl;
 
 import io.deephaven.configuration.Configuration;
@@ -105,9 +105,6 @@ public class OperationSnapshotControl implements ConstructSnapshot.SnapshotContr
             final boolean usedPreviousValues) {
         final boolean snapshotConsistent;
         if (isInInitialNotificationWindow()) {
-            if (eventualListener == null) {
-                throw new IllegalStateException("Listener has not been set on end!");
-            }
             if (eventualResult == null) {
                 throw new IllegalStateException("Result has not been set on end!");
             }
@@ -122,7 +119,7 @@ public class OperationSnapshotControl implements ConstructSnapshot.SnapshotContr
                     .append("} snapshotCompletedConsistently: afterClockValue=").append(afterClockValue)
                     .append(", usedPreviousValues=").append(usedPreviousValues)
                     .append(", snapshotConsistent=").append(snapshotConsistent)
-                    .append(", last=").append(lastNotificationStep)
+                    .append(", lastNotificationStep=").append(lastNotificationStep)
                     .endl();
         }
 
@@ -132,7 +129,7 @@ public class OperationSnapshotControl implements ConstructSnapshot.SnapshotContr
 
         // Be sure to record initial last notification step before subscribing
         eventualResult.setLastNotificationStep(lastNotificationStep);
-        return subscribeForUpdates(eventualListener);
+        return eventualListener == null || subscribeForUpdates(eventualListener);
     }
 
     /**
@@ -160,7 +157,7 @@ public class OperationSnapshotControl implements ConstructSnapshot.SnapshotContr
      * @param resultTable The table that will result from this operation
      */
     public synchronized void setListenerAndResult(
-            @NotNull final TableUpdateListener listener,
+            final TableUpdateListener listener,
             @NotNull final NotificationStepReceiver resultTable) {
         eventualListener = listener;
         eventualResult = resultTable;

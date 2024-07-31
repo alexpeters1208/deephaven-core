@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl;
 
 import io.deephaven.api.ColumnName;
@@ -54,6 +54,16 @@ public abstract class MemoizedOperationKey {
         @Override
         boolean attributesCompatible(Map<String, Object> oldAttributes, Map<String, Object> newAttributes) {
             return true;
+        }
+
+        @Override
+        abstract BaseTable.CopyAttributeOperation copyType();
+    }
+
+    abstract static class BlinkIncompatibleMemoizedOperationKey extends MemoizedOperationKey {
+        @Override
+        boolean attributesCompatible(Map<String, Object> oldAttributes, Map<String, Object> newAttributes) {
+            return BlinkTableTools.hasBlink(oldAttributes) == BlinkTableTools.hasBlink(newAttributes);
         }
 
         @Override
@@ -116,6 +126,10 @@ public abstract class MemoizedOperationKey {
             Collection<? extends ColumnName> groupByColumns, boolean includeConstituents) {
         return new Rollup(new AggBy(new ArrayList<>(aggregations), false, null, new ArrayList<>(groupByColumns)),
                 includeConstituents);
+    }
+
+    public static MemoizedOperationKey blinkToAppendOnly(final long sizeLimit, @NotNull final Object key) {
+        return new BlinkToAppendOnly(sizeLimit, key);
     }
 
     private static boolean isMemoizable(SelectColumn[] selectColumn) {
@@ -356,7 +370,7 @@ public abstract class MemoizedOperationKey {
         }
     }
 
-    private static class AggBy extends AttributeAgnosticMemoizedOperationKey {
+    private static class AggBy extends BlinkIncompatibleMemoizedOperationKey {
 
         private final List<? extends Aggregation> aggregations;
         private final boolean preserveEmpty;
@@ -438,7 +452,7 @@ public abstract class MemoizedOperationKey {
         }
     }
 
-    private static class Rollup extends AttributeAgnosticMemoizedOperationKey {
+    private static class Rollup extends BlinkIncompatibleMemoizedOperationKey {
 
         private final AggBy aggBy;
         private final boolean includeConstituents;
@@ -540,7 +554,7 @@ public abstract class MemoizedOperationKey {
         }
     }
 
-    public static WouldMatch wouldMatch(WouldMatchPair... pairs) {
+    public static MemoizedOperationKey wouldMatch(WouldMatchPair... pairs) {
         return new WouldMatch(pairs);
     }
 
@@ -592,7 +606,7 @@ public abstract class MemoizedOperationKey {
         }
     }
 
-    public static CrossJoin crossJoin(final Table rightTable, final MatchPair[] columnsToMatch,
+    public static MemoizedOperationKey crossJoin(final Table rightTable, final MatchPair[] columnsToMatch,
             final MatchPair[] columnsToAdd, final int numRightBitsToReserve) {
         return new CrossJoin(rightTable, columnsToMatch, columnsToAdd, numRightBitsToReserve);
     }
@@ -650,7 +664,7 @@ public abstract class MemoizedOperationKey {
         }
     }
 
-    public static RangeJoin rangeJoin(
+    public static MemoizedOperationKey rangeJoin(
             @NotNull final Table rightTable,
             @NotNull final Collection<? extends JoinMatch> exactMatches,
             @NotNull final RangeJoinMatch rangeMatch,
@@ -671,5 +685,39 @@ public abstract class MemoizedOperationKey {
             return false;
         }
         return t1 == t2;
+    }
+
+    private static class BlinkToAppendOnly extends AttributeAgnosticMemoizedOperationKey {
+        private final long sizeLimit;
+        private final Object key;
+
+        private BlinkToAppendOnly(final long sizeLimit, @NotNull final Object key) {
+            this.sizeLimit = sizeLimit;
+            this.key = Objects.requireNonNull(key);
+        }
+
+        @Override
+        public boolean equals(final Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (other == null || getClass() != other.getClass()) {
+                return false;
+            }
+
+            final BlinkToAppendOnly blinkToAppendOnly = (BlinkToAppendOnly) other;
+
+            return sizeLimit == blinkToAppendOnly.sizeLimit && key.equals(blinkToAppendOnly.key);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * key.hashCode() + Long.hashCode(sizeLimit);
+        }
+
+        @Override
+        BaseTable.CopyAttributeOperation copyType() {
+            return BaseTable.CopyAttributeOperation.None;
+        }
     }
 }

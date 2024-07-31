@@ -1,16 +1,35 @@
 #
-# Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+# Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
 #
 
 """ This module provides Java compatibility support including convenience functions to create some widely used Java
 data structures from corresponding Python ones in order to be able to call Java methods. """
 
-from typing import Any, Callable, Dict, Iterable, List, Sequence, Set, TypeVar, Union
+from typing import Any, Callable, Dict, Iterable, List, Sequence, Set, TypeVar, Union, Optional
 
 import jpy
+import numpy as np
+import pandas as pd
 
-from deephaven._wrapper import unwrap, wrap_j_object
-from deephaven.dtypes import DType
+from deephaven import dtypes, DHError
+from deephaven._wrapper import unwrap, wrap_j_object, JObjectWrapper
+from deephaven.dtypes import DType, _PRIMITIVE_DTYPE_NULL_MAP
+from deephaven.column import Column
+
+_NULL_BOOLEAN_AS_BYTE = jpy.get_type("io.deephaven.util.BooleanUtils").NULL_BOOLEAN_AS_BYTE
+_JPrimitiveArrayConversionUtility = jpy.get_type("io.deephaven.integrations.common.PrimitiveArrayConversionUtility")
+_JTableDefinition = jpy.get_type("io.deephaven.engine.table.TableDefinition")
+
+_DH_PANDAS_NULLABLE_TYPE_MAP: Dict[DType, pd.api.extensions.ExtensionDtype] = {
+    dtypes.bool_: pd.BooleanDtype,
+    dtypes.byte: pd.Int8Dtype,
+    dtypes.short: pd.Int16Dtype,
+    dtypes.char: pd.UInt16Dtype,
+    dtypes.int32: pd.Int32Dtype,
+    dtypes.int64: pd.Int64Dtype,
+    dtypes.float32: pd.Float32Dtype,
+    dtypes.float64: pd.Float64Dtype,
+}
 
 
 def is_java_type(obj: Any) -> bool:
@@ -181,11 +200,188 @@ def to_sequence(v: Union[T, Sequence[T]] = None, wrapped: bool = False) -> Seque
         return ()
     if wrapped:
         if not isinstance(v, Sequence) or isinstance(v, str):
-            return (v, )
+            return (v,)
         else:
             return tuple(v)
 
     if not isinstance(v, Sequence) or isinstance(v, str):
-        return (unwrap(v), )
+        return (unwrap(v),)
     else:
         return tuple((unwrap(o) for o in v))
+
+
+def _j_array_to_numpy_array(dtype: DType, j_array: jpy.JType, conv_null: bool, type_promotion: bool = False) -> \
+        Optional[np.ndarray]:
+    """ Produces a numpy array from the DType and given Java array.
+
+    Args:
+        dtype (DType): The dtype of the Java array
+        j_array (jpy.JType): The Java array to convert
+        conv_null (bool): If True, convert nulls to the null value for the dtype
+        type_promotion (bool): Ignored when conv_null is False. When conv_null is True, see the description for the same
+            named parameter in dh_nulls_to_nan().
+
+    Returns:
+        np.ndarray: The numpy array or None if the Java array is None
+
+    Raises:
+        DHError
+    """
+    if j_array is None:
+        return None
+
+    if dtype.is_primitive:
+        np_array = np.frombuffer(j_array, dtype.np_type)
+    elif dtype == dtypes.Instant:
+        longs = _JPrimitiveArrayConversionUtility.translateArrayInstantToLong(j_array)
+        np_long_array = np.frombuffer(longs, np.int64)
+        np_array = np_long_array.view(dtype.np_type)
+    elif dtype == dtypes.bool_:
+        # dh nulls will be preserved and show up as True b/c the underlying byte array isn't modified
+        bytes_ = _JPrimitiveArrayConversionUtility.translateArrayBooleanToByte(j_array)
+        np_array = np.frombuffer(bytes_, dtype.np_type)
+    elif dtype == dtypes.string:
+        np_array = np.array(j_array, dtypes.string.np_type)
+    elif dtype.np_type is not np.object_:
+        try:
+            np_array = np.frombuffer(j_array, dtype.np_type)
+        except:
+            np_array = np.array(j_array, np.object_)
+    else:
+        np_array = np.array(j_array, np.object_)
+
+    if conv_null:
+        return dh_null_to_nan(np_array, type_promotion)
+
+    return np_array
+
+def dh_null_to_nan(np_array: np.ndarray, type_promotion: bool = False) -> np.ndarray:
+    """Converts Deephaven primitive null values in the given numpy array to np.nan. No conversion is performed on
+    non-primitive types.
+
+    Note, the input numpy array is modified in place if it is of a float or double type. If that's not a desired behavior,
+    pass a copy of the array instead. For input arrays of other types, a new array is always returned.
+
+    Args:
+        np_array (np.ndarray): The numpy array to convert
+        type_promotion (bool): When False, integer, boolean, or character arrays will cause an exception to be raised.
+            When True, integer, boolean, or character arrays are converted to new np.float64 arrays and Deephaven null
+            values in them are converted to np.nan. Numpy arrays of float or double types are not affected by this flag
+            and Deephaven nulls will always be converted to np.nan in place. Defaults to False.
+
+    Returns:
+        np.ndarray: The numpy array with Deephaven nulls converted to np.nan.
+
+    Raises:
+        DHError
+    """
+    if not isinstance(np_array, np.ndarray):
+        raise DHError(message="The given np_array argument is not a numpy array.")
+
+    dtype = dtypes.from_np_dtype(np_array.dtype)
+    if dh_null := _PRIMITIVE_DTYPE_NULL_MAP.get(dtype):
+        if dtype in (dtypes.float32, dtypes.float64):
+            np_array = np.copy(np_array)
+            np_array[np_array == dh_null] = np.nan
+        else:
+            if not type_promotion:
+                raise DHError(message=f"failed to convert DH nulls to np.nan in the numpy array. The array is "
+                                      f"of {np_array.dtype.type} type  but type_promotion is False")
+            if dtype is dtypes.bool_:  # needs to change its type to byte for dh null detection
+                np_array = np.frombuffer(np_array, np.byte)
+
+            np_array = np_array.astype(np.float64)
+            np_array[np_array == dh_null] = np.nan
+
+    return np_array
+
+def _j_array_to_series(dtype: DType, j_array: jpy.JType, conv_null: bool) -> pd.Series:
+    """Produce a copy of the specified Java array as a pandas.Series object.
+
+    Args:
+        dtype (DType): the dtype of the Java array
+        j_array (jpy.JType): the Java array
+        conv_null (bool): whether to check for Deephaven nulls in the data and automatically replace them with
+            pd.NA.
+
+    Returns:
+        a pandas Series
+
+    Raises:
+        DHError
+    """
+    if conv_null and dtype == dtypes.bool_:
+        j_array = _JPrimitiveArrayConversionUtility.translateArrayBooleanToByte(j_array)
+        np_array = np.frombuffer(j_array, dtype=np.byte)
+        s = pd.Series(data=np_array, dtype=pd.Int8Dtype(), copy=False)
+        s.mask(s == _NULL_BOOLEAN_AS_BYTE, inplace=True)
+        return s.astype(pd.BooleanDtype(), copy=False)
+
+    np_array = _j_array_to_numpy_array(dtype, j_array, conv_null=False)
+    if conv_null and (nv := _PRIMITIVE_DTYPE_NULL_MAP.get(dtype)) is not None:
+        pd_ex_dtype = _DH_PANDAS_NULLABLE_TYPE_MAP.get(dtype)
+        s = pd.Series(data=np_array, dtype=pd_ex_dtype(), copy=False)
+        s.mask(s == nv, inplace=True)
+    else:
+        s = pd.Series(data=np_array, copy=False)
+
+    return s
+
+def j_table_definition(table_definition: Union[Dict[str, DType], List[Column], None]) -> Optional[jpy.JType]:
+    """Produce a Deephaven TableDefinition from user input.
+
+    Args:
+        table_definition (Union[Dict[str, DType], List[Column], None]): the table definition as a dictionary of column
+            names and their corresponding data types or a list of Column objects
+
+    Returns:
+        a Deephaven TableDefinition object or None if the input is None
+
+    Raises:
+        DHError
+    """
+    if table_definition is None:
+        return None
+    elif isinstance(table_definition, Dict):
+        return _JTableDefinition.of(
+            [
+                Column(name=name, data_type=dtype).j_column_definition
+                for name, dtype in table_definition.items()
+            ]
+        )
+    elif isinstance(table_definition, List):
+        return _JTableDefinition.of(
+            [col.j_column_definition for col in table_definition]
+        )
+    else:
+        raise DHError(f"Unexpected table_definition type: {type(table_definition)}")
+
+
+class AutoCloseable(JObjectWrapper):
+    """A context manager wrapper to allow Java AutoCloseable to be used in with statements.
+    
+    When constructing a new instance, the Java AutoCloseable must not be closed."""
+
+    j_object_type = jpy.get_type("java.lang.AutoCloseable")
+
+    def __init__(self, j_auto_closeable):
+        self._j_auto_closeable = j_auto_closeable
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self._j_auto_closeable.close()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+    @property
+    def j_object(self) -> jpy.JType:
+        return self._j_auto_closeable

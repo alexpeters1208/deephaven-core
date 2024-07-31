@@ -1,21 +1,22 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.server.table.ops;
 
 import com.google.rpc.Code;
 import io.deephaven.auth.codegen.impl.TableServiceContextualAuthWiring;
-import io.deephaven.datastructures.util.CollectionUtil;
 import io.deephaven.engine.table.Table;
 import io.deephaven.engine.table.TableDefinition;
-import io.deephaven.engine.table.impl.util.AppendOnlyArrayBackedMutableTable;
-import io.deephaven.engine.table.impl.util.KeyedArrayBackedMutableTable;
+import io.deephaven.engine.table.impl.util.AppendOnlyArrayBackedInputTable;
+import io.deephaven.engine.table.impl.util.KeyedArrayBackedInputTable;
 import io.deephaven.extensions.barrage.util.BarrageUtil;
 import io.deephaven.proto.backplane.grpc.BatchTableRequest;
 import io.deephaven.proto.backplane.grpc.CreateInputTableRequest;
+import io.deephaven.proto.backplane.grpc.CreateInputTableRequest.InputTableKind.KindCase;
 import io.deephaven.proto.flight.util.SchemaHelper;
 import io.deephaven.proto.util.Exceptions;
 import io.deephaven.server.session.SessionState;
+import io.deephaven.stream.TablePublisher;
 import io.grpc.StatusRuntimeException;
 import org.apache.arrow.flatbuf.Schema;
 
@@ -23,6 +24,7 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static io.deephaven.proto.backplane.grpc.CreateInputTableRequest.InputTableKind.KindCase.KIND_NOT_SET;
 
@@ -33,6 +35,8 @@ public class CreateInputTableGrpcImpl extends GrpcTableOperation<CreateInputTabl
             (CreateInputTableRequest req) -> req.hasSourceTableId()
                     ? Collections.singletonList(req.getSourceTableId())
                     : Collections.emptyList();
+
+    private static final AtomicInteger blinkTableCount = new AtomicInteger();
 
     @Inject
     public CreateInputTableGrpcImpl(final TableServiceContextualAuthWiring authWiring) {
@@ -68,17 +72,30 @@ public class CreateInputTableGrpcImpl extends GrpcTableOperation<CreateInputTabl
         } else {
             throw new IllegalStateException("missing schema and source_table_id");
         }
+        final Table table = create(request, tableDefinitionFromSchema);
+        if (!table.hasAttribute(Table.INPUT_TABLE_ATTRIBUTE)) {
+            throw new IllegalStateException(
+                    String.format("Expected table to have attribute '%s'", Table.INPUT_TABLE_ATTRIBUTE));
+        }
+        return table;
+    }
 
-        switch (request.getKind().getKindCase()) {
+    private static Table create(CreateInputTableRequest request, TableDefinition tableDefinitionFromSchema) {
+        final KindCase kindCase = request.getKind().getKindCase();
+        switch (kindCase) {
             case IN_MEMORY_APPEND_ONLY:
-                return AppendOnlyArrayBackedMutableTable.make(tableDefinitionFromSchema);
+                return AppendOnlyArrayBackedInputTable.make(tableDefinitionFromSchema);
             case IN_MEMORY_KEY_BACKED:
-                return KeyedArrayBackedMutableTable.make(tableDefinitionFromSchema,
+                return KeyedArrayBackedInputTable.make(tableDefinitionFromSchema,
                         request.getKind().getInMemoryKeyBacked().getKeyColumnsList()
-                                .toArray(CollectionUtil.ZERO_LENGTH_STRING_ARRAY));
+                                .toArray(String[]::new));
+            case BLINK:
+                final String name =
+                        CreateInputTableGrpcImpl.class.getSimpleName() + ".BLINK-" + blinkTableCount.getAndIncrement();
+                return TablePublisher.of(name, tableDefinitionFromSchema, null, null).inputTable();
             case KIND_NOT_SET:
             default:
-                throw new IllegalStateException("Unsupported input table kind");
+                throw new IllegalStateException("Unsupported input table kind: " + kindCase);
         }
     }
 }

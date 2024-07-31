@@ -109,7 +109,7 @@ docker compose up
 
 ### pip-installed Deephaven
 
-Users who wish to use Python but not Docker should use [pip-installed Deephaven](https://deephaven.io/core/docs/tutorials/quickstart-pip/).
+Users who wish to use Python but not Docker should use [pip-installed Deephaven](https://deephaven.io/core/docs/tutorials/quickstart-pip/). For users with Windows operating systems, WSL is **not** required to use Deephaven this way.
 
 ```sh
 pip install --upgrade pip setuptools wheel
@@ -134,7 +134,7 @@ Building and running Deephaven requires a few software packages.
 | Package        | Version                       | OS           | Required/Recommended |
 | -------------- | ----------------------------- | ------------ | -------------------- |
 | git            | ^2.25.0                       | All          | Required             |
-| java           | >=11, <20                     | All          | Required             |
+| java           | >=11, <=22                    | All          | Required             |
 | docker         | ^20.10.8                      | All          | Required             |
 | docker compose | ^2                            | All          | Recommended          |
 | Windows        | 10 (OS build 20262 or higher) | Only Windows | Required             |
@@ -150,18 +150,10 @@ docker compose version
 docker run hello-world
 ```
 
-:::note
-
-Internally, the Java build process will use [Gradle Auto Provisioning](https://docs.gradle.org/current/userguide/toolchains.html#sec:provisioning)
+> **_NOTE:_** Internally, the Java build process will use [Gradle Auto Provisioning](https://docs.gradle.org/current/userguide/toolchains.html#sec:provisioning)
 to download and use the appropriate Java version for building and testing.
 
-:::
-
-:::note
-
-On Windows, all commands must be run inside a WSL 2 terminal.
-
-:::
+> **_NOTE:_** On Windows, all commands must be run inside a WSL 2 terminal.
 
 #### Python
 
@@ -185,6 +177,13 @@ The Groovy server is built with [Gradle](https://gradle.org/). `-Pgroovy` builds
 git clone https://github.com/deephaven/deephaven-core.git
 cd deephaven-core
 ./gradlew server-jetty-app:run -Pgroovy
+```
+
+#### Debugging
+
+You can debug the server by adding the `-Pdebug` flag, and then attaching a debugger to port 5005. This can be used in conjunction with other flags. For example, if you wanted to debug a server and startup with Groovy:
+```sh
+./gradlew server-jetty-app:run -Pgroovy -Pdebug
 ```
 
 ## Get the authentication key

@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.lang;
 
 import com.github.javaparser.StaticJavaParser;
@@ -86,8 +86,6 @@ import groovy.lang.Closure;
 import io.deephaven.base.Pair;
 import io.deephaven.base.verify.Assert;
 import io.deephaven.configuration.Configuration;
-import io.deephaven.engine.context.ExecutionContext;
-import io.deephaven.engine.context.QueryScope;
 import io.deephaven.engine.table.impl.MatchPair;
 import io.deephaven.engine.table.impl.ShiftedColumnsFactory;
 import io.deephaven.engine.util.PyCallableWrapper;
@@ -96,6 +94,8 @@ import io.deephaven.engine.util.PyCallableWrapper.ConstantChunkArgument;
 import io.deephaven.engine.util.PyCallableWrapperJpyImpl;
 import io.deephaven.internal.log.LoggerFactory;
 import io.deephaven.io.logger.Logger;
+import io.deephaven.time.TimeLiteralReplacedExpression;
+import io.deephaven.util.annotations.TestUseOnly;
 import io.deephaven.util.type.TypeUtils;
 import io.deephaven.vector.ByteVector;
 import io.deephaven.vector.CharVector;
@@ -110,6 +110,7 @@ import org.apache.commons.lang3.ClassUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.VisibleForTesting;
 import org.jpy.PyObject;
 
 import java.lang.reflect.Array;
@@ -144,6 +145,8 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
 
     private final Map<String, Class<?>> variables;
     private final Map<String, Class<?>[]> variableTypeArguments;
+    private final Map<String, Object> queryScopeVariables;
+    private final Set<String> columnVariables;
 
     private final HashSet<String> variablesUsed = new HashSet<>();
 
@@ -152,7 +155,7 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
     private final Map<String, Class<?>> staticImportLookupCache = new HashMap<>();
 
     // We need some class to represent null. We know for certain that this one won't be used...
-    private static final Class<?> NULL_CLASS = QueryLanguageParser.class;
+    public static final Class<?> NULL_CLASS = QueryLanguageParser.class;
 
     /**
      * The result of the QueryLanguageParser for the expression passed given to the constructor.
@@ -187,16 +190,35 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
      *        imported.
      * @param variables A map of the names of scope variables to their types
      * @param variableTypeArguments A map of the names of scope variables to their type arguments
+     * @param unboxArguments If true it will unbox the query scope arguments
+     * @param queryScopeVariables A mutable map of the names of query scope variables to their values
+     * @param columnVariables A set of column variable names
      * @throws QueryLanguageParseException If any exception or error is encountered
      */
-    public QueryLanguageParser(String expression,
+    public QueryLanguageParser(
+            String expression,
             Collection<Package> packageImports,
             Collection<Class<?>> classImports,
             Collection<Class<?>> staticImports,
             Map<String, Class<?>> variables,
-            Map<String, Class<?>[]> variableTypeArguments) throws QueryLanguageParseException {
-        this(expression, packageImports, classImports, staticImports, variables,
-                variableTypeArguments, true);
+            Map<String, Class<?>[]> variableTypeArguments,
+            @Nullable Map<String, Object> queryScopeVariables,
+            @Nullable Set<String> columnVariables,
+            boolean unboxArguments,
+            @Nullable TimeLiteralReplacedExpression timeConversionResult) throws QueryLanguageParseException {
+        this(
+                expression,
+                packageImports,
+                classImports,
+                staticImports,
+                variables,
+                variableTypeArguments,
+                queryScopeVariables,
+                columnVariables,
+                unboxArguments,
+                false,
+                PyCallableWrapperJpyImpl.class.getName(),
+                timeConversionResult);
     }
 
     /**
@@ -211,28 +233,21 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
      *        imported.
      * @param variables A map of the names of scope variables to their types
      * @param variableTypeArguments A map of the names of scope variables to their type arguments
-     * @param unboxArguments If true it will unbox the query scope arguments
      * @throws QueryLanguageParseException If any exception or error is encountered
      */
-    public QueryLanguageParser(String expression,
+    @TestUseOnly
+    QueryLanguageParser(
+            String expression,
             Collection<Package> packageImports,
             Collection<Class<?>> classImports,
             Collection<Class<?>> staticImports,
             Map<String, Class<?>> variables,
-            Map<String, Class<?>[]> variableTypeArguments, boolean unboxArguments)
-            throws QueryLanguageParseException {
-        this(
-                expression,
-                packageImports,
-                classImports,
-                staticImports,
-                variables,
-                variableTypeArguments,
-                unboxArguments,
-                false,
-                PyCallableWrapperJpyImpl.class.getName());
+            Map<String, Class<?>[]> variableTypeArguments) throws QueryLanguageParseException {
+        this(expression, packageImports, classImports, staticImports, variables,
+                variableTypeArguments, null, null, true, null);
     }
 
+    @VisibleForTesting
     QueryLanguageParser(
             String expression,
             final Collection<Package> packageImports,
@@ -240,15 +255,20 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
             final Collection<Class<?>> staticImports,
             final Map<String, Class<?>> variables,
             final Map<String, Class<?>[]> variableTypeArguments,
+            @Nullable final Map<String, Object> queryScopeVariables,
+            @Nullable final Set<String> columnVariables,
             final boolean unboxArguments,
             final boolean verifyIdempotence,
-            final @NotNull String pyCallableWrapperImplName) throws QueryLanguageParseException {
+            @NotNull final String pyCallableWrapperImplName,
+            @Nullable final TimeLiteralReplacedExpression timeConversionResult) throws QueryLanguageParseException {
         this.packageImports = packageImports == null ? Collections.emptySet() : Set.copyOf(packageImports);
         this.classImports = classImports == null ? Collections.emptySet() : Set.copyOf(classImports);
         this.staticImports = staticImports == null ? Collections.emptySet() : Set.copyOf(staticImports);
         this.variables = variables == null ? Collections.emptyMap() : Map.copyOf(variables);
         this.variableTypeArguments =
                 variableTypeArguments == null ? Collections.emptyMap() : Map.copyOf(variableTypeArguments);
+        this.queryScopeVariables = queryScopeVariables == null ? new HashMap<>() : queryScopeVariables;
+        this.columnVariables = columnVariables == null ? Collections.emptySet() : columnVariables;
         this.unboxArguments = unboxArguments;
 
         Assert.nonempty(pyCallableWrapperImplName, "pyCallableWrapperImplName");
@@ -299,9 +319,10 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
             if (verifyIdempotence) {
                 try {
                     // make sure the parser has no problem reparsing its own output and makes no changes to it.
-                    final QueryLanguageParser validationQueryLanguageParser = new QueryLanguageParser(printedSource,
-                            packageImports, classImports, staticImports, variables,
-                            variableTypeArguments, false, false, pyCallableWrapperImplName);
+                    final QueryLanguageParser validationQueryLanguageParser = new QueryLanguageParser(
+                            printedSource, packageImports, classImports, staticImports, variables,
+                            variableTypeArguments, queryScopeVariables, columnVariables, false, false,
+                            pyCallableWrapperImplName, timeConversionResult);
 
                     final String reparsedSource = validationQueryLanguageParser.result.source;
                     Assert.equals(
@@ -318,8 +339,8 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
                 }
             }
 
-            result = new Result(type, printer.builder.toString(), variablesUsed, isConstantValueExpression,
-                    formulaShiftColPair);
+            result = new Result(type, printer.builder.toString(), variablesUsed, this.queryScopeVariables,
+                    isConstantValueExpression, formulaShiftColPair, timeConversionResult);
         } catch (Throwable e) {
             // need to catch it and make a new one because it contains unserializable variables...
             final StringBuilder exceptionMessageBuilder = new StringBuilder(1024)
@@ -1649,7 +1670,6 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
             if (isNonequalOpOverload && printer.hasStringBuilder()) {
                 // sanity checks -- the inner expression *must* be a BinaryExpr (for ==), and it must be replaced in
                 // this UnaryExpr with a MethodCallExpr (for "eq()" or possibly "isNull()").
-                Assert.instanceOf(n.getExpression(), "n.getExpression()", MethodCallExpr.class);
                 final MethodCallExpr methodCall = (MethodCallExpr) n.getExpression();
                 final String methodName = methodCall.getNameAsString();
                 if (!"eq".equals(methodName) && !"isNull".equals(methodName)) {
@@ -1894,7 +1914,7 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
      * @return {@code true} if a conversion from {@code original} to {@code target} is a widening conversion; otherwise,
      *         {@code false}.
      */
-    static boolean isWideningPrimitiveConversion(Class<?> original, Class<?> target) {
+    public static boolean isWideningPrimitiveConversion(Class<?> original, Class<?> target) {
         if (original == null || !original.isPrimitive() || target == null || !target.isPrimitive()
                 || original.equals(void.class) || target.equals(void.class)) {
             throw new IllegalArgumentException("Arguments must be a primitive type (excluding void)!");
@@ -1922,6 +1942,7 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
         }
         return false;
     }
+
 
     private enum LanguageParserPrimitiveType {
         // Including "Enum" (or really, any differentiating string) in these names is important. They're used
@@ -2453,11 +2474,35 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
 
         // Attempt python function call vectorization.
         if (scopeType != null && PyCallableWrapper.class.isAssignableFrom(scopeType)) {
+            verifyPyCallableArguments(n, argTypes);
             tryVectorizePythonCallable(n, scopeType, convertedArgExpressions, argTypes);
         }
 
         return calculateMethodReturnTypeUsingGenerics(scopeType, n.getScope().orElse(null), method, expressionTypes,
                 typeArguments);
+    }
+
+    private void verifyPyCallableArguments(@NotNull MethodCallExpr n, @NotNull Class<?>[] argTypes) {
+        final String invokedMethodName = n.getNameAsString();
+
+        if (GET_ATTRIBUTE_METHOD_NAME.equals(invokedMethodName)) {
+            // Currently Python UDF handling is only supported for top module level function(callable) calls.
+            // The getAttribute() calls which is needed to support Python method calls, which is beyond the scope of
+            // current implementation. So we are skipping the argument verification for getAttribute() calls.
+            return;
+        }
+        if (!n.containsData(QueryLanguageParserDataKeys.PY_CALLABLE_DETAILS)) {
+            return;
+        }
+        final PyCallableDetails pyCallableDetails = n.getData(QueryLanguageParserDataKeys.PY_CALLABLE_DETAILS);
+        final String pyMethodName = pyCallableDetails.pythonMethodName;
+        final Object methodVar = queryScopeVariables.get(pyMethodName);
+        if (!(methodVar instanceof PyCallableWrapper)) {
+            return;
+        }
+        final PyCallableWrapper pyCallableWrapper = (PyCallableWrapper) methodVar;
+        pyCallableWrapper.parseSignature();
+        pyCallableWrapper.verifyArguments(argTypes);
     }
 
     private Optional<CastExpr> makeCastExpressionForPyCallable(Class<?> retType, MethodCallExpr callMethodCall) {
@@ -2501,17 +2546,13 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
     private Optional<Class<?>> pyCallableReturnType(@NotNull MethodCallExpr n) {
         final PyCallableDetails pyCallableDetails = n.getData(QueryLanguageParserDataKeys.PY_CALLABLE_DETAILS);
         final String pyMethodName = pyCallableDetails.pythonMethodName;
-        final QueryScope queryScope = ExecutionContext.getContext().getQueryScope();
-        final Object paramValueRaw = queryScope.readParamValue(pyMethodName, null);
-        if (paramValueRaw == null) {
-            return Optional.empty();
-        }
+        final Object paramValueRaw = queryScopeVariables.get(pyMethodName);
         if (!(paramValueRaw instanceof PyCallableWrapper)) {
             return Optional.empty();
         }
         final PyCallableWrapper pyCallableWrapper = (PyCallableWrapper) paramValueRaw;
         pyCallableWrapper.parseSignature();
-        return Optional.ofNullable(pyCallableWrapper.getReturnType());
+        return Optional.ofNullable(pyCallableWrapper.getSignature().getReturnType());
     }
 
     @NotNull
@@ -2594,15 +2635,13 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
         final String pyMethodName = pyCallableDetails.pythonMethodName;
         Assert.nonempty(pyMethodName, "pyMethodName");
 
-        final QueryScope queryScope = ExecutionContext.getContext().getQueryScope();
-
         // Note: "paramValueRaw" needs to be the *actual PyCallableWrapper* corresponding to the method.
         // TODO: Support vectorization of instance methods of constant objects
         // ^^ i.e., create a constant for `new PyCallableWrapperImpl(pyScopeObj.getAttribute("pyMethodName"))`
-        final Object paramValueRaw = queryScope.readParamValue(pyMethodName, null);
-        if (paramValueRaw == null) {
+        if (!queryScopeVariables.containsKey(pyMethodName)) {
             throw new IllegalStateException("Resolved Python function name " + pyMethodName + " not found");
         }
+        final Object paramValueRaw = queryScopeVariables.get(pyMethodName);
         if (!(paramValueRaw instanceof PyCallableWrapper)) {
             throw new IllegalStateException("Resolved Python function name " + pyMethodName + " not callable");
         }
@@ -2610,7 +2649,7 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
 
         prepareVectorization(n, argExpressions, pyCallableWrapper);
         if (pyCallableWrapper.isVectorizable()) {
-            prepareVectorizationArgs(n, queryScope, argExpressions, argTypes, pyCallableWrapper);
+            prepareVectorizationArgs(n, argExpressions, argTypes, pyCallableWrapper);
         }
     }
 
@@ -2644,7 +2683,8 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
         pyCallableWrapper.parseSignature();
         if (!pyCallableWrapper.isVectorizableReturnType()) {
             throw new PythonCallVectorizationFailure(
-                    "Python function return type is not supported: " + pyCallableWrapper.getReturnType());
+                    "Python function return type is not supported: "
+                            + pyCallableWrapper.getSignature().getReturnType());
         }
 
         // Python vectorized functions(numba, DH) return arrays of primitive/Object types. This will break the generated
@@ -2687,21 +2727,21 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
             }
         }
 
-        List<Class<?>> paramTypes = pyCallableWrapper.getParamTypes();
-        if (paramTypes.size() != expressions.length) {
+        if (pyCallableWrapper.getSignature().getParameters().size() != expressions.length) {
             // note vectorization doesn't handle Python variadic arguments
             throw new PythonCallVectorizationFailure("Python function argument count mismatch: " + n + " "
-                    + paramTypes.size() + " vs. " + expressions.length);
+                    + pyCallableWrapper.getSignature().getParameters().size() + " vs. " + expressions.length);
         }
     }
 
-    private void prepareVectorizationArgs(MethodCallExpr n, QueryScope queryScope, Expression[] expressions,
+    private void prepareVectorizationArgs(
+            MethodCallExpr n,
+            Expression[] expressions,
             Class<?>[] argTypes,
             PyCallableWrapper pyCallableWrapper) {
-        List<Class<?>> paramTypes = pyCallableWrapper.getParamTypes();
-        if (paramTypes.size() != expressions.length) {
+        if (pyCallableWrapper.getSignature().getParameters().size() != expressions.length) {
             throw new PythonCallVectorizationFailure("Python function argument count mismatch: " + n + " "
-                    + paramTypes.size() + " vs. " + expressions.length);
+                    + pyCallableWrapper.getSignature().getParameters().size() + " vs. " + expressions.length);
         }
 
         pyCallableWrapper.initializeChunkArguments();
@@ -2710,20 +2750,17 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
                 addLiteralArg(expressions[i], argTypes[i], pyCallableWrapper);
             } else if (expressions[i] instanceof NameExpr) {
                 String name = expressions[i].asNameExpr().getNameAsString();
-                try {
-                    Object param = queryScope.readParamValue(name);
-                    pyCallableWrapper.addChunkArgument(new ConstantChunkArgument(param, argTypes[i]));
-                } catch (QueryScope.MissingVariableException ex) {
+                if (columnVariables.contains(name)) {
                     // A column name or one of the special variables
                     pyCallableWrapper.addChunkArgument(new ColumnChunkArgument(name, argTypes[i]));
+                } else if (queryScopeVariables.containsKey(name)) {
+                    pyCallableWrapper.addChunkArgument(
+                            new ConstantChunkArgument(queryScopeVariables.get(name), argTypes[i]));
+                } else {
+                    throw new IllegalStateException("Vectorizability check could not find variable by name: " + name);
                 }
             } else {
                 throw new IllegalStateException("Vectorizability check failed: " + n);
-            }
-
-            if (!isSafelyCoerceable(argTypes[i], paramTypes.get(i))) {
-                throw new PythonCallVectorizationFailure("Python vectorized function argument type mismatch: " + n + " "
-                        + argTypes[i].getSimpleName() + " -> " + paramTypes.get(i).getSimpleName());
             }
         }
     }
@@ -3180,16 +3217,26 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
         private final Class<?> type;
         private final String source;
         private final HashSet<String> variablesUsed;
+        private final Map<String, Object> possibleParams;
         private final boolean isConstantValueExpression;
         private final Pair<String, Map<Long, List<MatchPair>>> formulaShiftColPair;
+        private final TimeLiteralReplacedExpression timeConversionResult;
 
-        Result(Class<?> type, String source, HashSet<String> variablesUsed, boolean isConstantValueExpression,
-                Pair<String, Map<Long, List<MatchPair>>> formulaShiftColPair) {
+        Result(
+                Class<?> type,
+                String source,
+                HashSet<String> variablesUsed,
+                Map<String, Object> possibleParams,
+                boolean isConstantValueExpression,
+                Pair<String, Map<Long, List<MatchPair>>> formulaShiftColPair,
+                TimeLiteralReplacedExpression timeConversionResult) {
             this.type = Objects.requireNonNull(type, "type");
             this.source = source;
             this.variablesUsed = variablesUsed;
+            this.possibleParams = possibleParams;
             this.isConstantValueExpression = isConstantValueExpression;
             this.formulaShiftColPair = formulaShiftColPair;
+            this.timeConversionResult = timeConversionResult;
         }
 
         public Class<?> getType() {
@@ -3208,8 +3255,16 @@ public final class QueryLanguageParser extends GenericVisitorAdapter<Class<?>, Q
             return variablesUsed;
         }
 
+        public Map<String, Object> getPossibleParams() {
+            return possibleParams;
+        }
+
         public Pair<String, Map<Long, List<MatchPair>>> getFormulaShiftColPair() {
             return formulaShiftColPair;
+        }
+
+        public TimeLiteralReplacedExpression getTimeConversionResult() {
+            return timeConversionResult;
         }
     }
 

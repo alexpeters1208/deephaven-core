@@ -1,8 +1,10 @@
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.context;
 
 import io.deephaven.base.log.LogOutput;
 import io.deephaven.engine.updategraph.LogicalClock;
-import io.deephaven.engine.updategraph.LogicalClockImpl;
 import io.deephaven.engine.updategraph.UpdateGraph;
 import io.deephaven.io.log.LogEntry;
 import io.deephaven.util.ExecutionContextRegistrationException;
@@ -118,4 +120,7 @@ public class PoisonedUpdateGraph implements UpdateGraph {
     public void requestRefresh() {
         fail();
     }
+
+    @Override
+    public void stop() {}
 }

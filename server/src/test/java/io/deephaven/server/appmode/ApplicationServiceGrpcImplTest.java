@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.server.appmode;
 
 import io.deephaven.engine.context.ExecutionContext;
@@ -87,8 +87,9 @@ public class ApplicationServiceGrpcImplTest {
 
         // trigger a change
         ScriptSession scriptSession = new NoLanguageDeephavenSession(
-                ExecutionContext.getDefaultContext().getUpdateGraph());
-        scriptSession.setVariable("key", "hello world");
+                ExecutionContext.getContext().getUpdateGraph(),
+                ExecutionContext.getContext().getOperationInitializer());
+        scriptSession.getQueryScope().putParam("key", "hello world");
         ScriptSession.Changes changes = new ScriptSession.Changes();
         changes.created.put("key", "Object");
         applicationServiceGrpcImpl.onScopeChanges(scriptSession, changes);

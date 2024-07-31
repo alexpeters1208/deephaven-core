@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.web.client.api.console;
 
 import com.vertispan.tsdefs.annotations.TsInterface;
@@ -12,8 +12,8 @@ import jsinterop.annotations.JsProperty;
 /**
  * A format to describe a variable available to be read from the server. Application fields are optional, and only
  * populated when a variable is provided by application mode.
- *
- * APIs which take a VariableDefinition` must at least be provided an object with a <b>type</b> and <b>id</b> field.
+ * <p>
+ * APIs which take a VariableDefinition must at least be provided an object with a <b>type</b> and <b>id</b> field.
  */
 @TsInterface
 @TsName(namespace = "dh.ide", name = "VariableDefinition")
@@ -28,6 +28,11 @@ public class JsVariableDefinition {
     private final String applicationName;
 
     public JsVariableDefinition(String type, String title, String id, String description) {
+        // base64('s/' + str) starts with 'cy8' or 'cy9'
+        // base64('a/' + str) starts with 'YS8' or 'YS9'
+        if (!id.startsWith("cy") && !id.startsWith("YS")) {
+            throw new IllegalArgumentException("Cannot create a VariableDefinition from a non-scope ticket");
+        }
         this.type = type;
         this.title = title == null ? JS_UNAVAILABLE : title;
         this.id = id;

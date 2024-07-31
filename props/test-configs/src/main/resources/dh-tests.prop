@@ -37,7 +37,7 @@ TableDataRefreshService.tableSizeRefreshMillis=1000
 
 ###### Time Zone & Calendars #####
 timezone.aliases=/test_time_zone_aliases.csv
-Calendar.default=USNYSE
+Calendar.default=CAL1
 Calendar.importPath=/test_calendar_imports.txt
 
 columnsFile=DeephavenColumns.xml
@@ -94,6 +94,9 @@ BarrageMessageProducer.minSnapshotCellCount=50
 BarrageMessageProducer.maxSnapshotCellCount=50
 BarrageStreamGenerator.batchSize=4
 
+web.storage.layout.directory=/layouts
+web.storage.notebook.directory=/notebooks
+
 http.session.durationMs=300000
 AuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler
 authentication.client.configuration.list=
@@ -102,4 +105,3 @@ client.version.list=
 authentication.anonymous.warn=false
 
 deephaven.console.type=none
-thread.initialization=

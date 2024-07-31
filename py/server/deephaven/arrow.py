@@ -1,5 +1,5 @@
 #
-#     Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+# Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
 #
 """This module supports conversions between pyarrow tables and Deephaven tables."""
 
@@ -32,13 +32,13 @@ _ARROW_DH_DATA_TYPE_MAPPING = {
     pa.time32('s'): '',
     pa.time32('ms'): '',
     pa.time64('us'): '',
-    pa.time64('ns'): '',
+    pa.time64('ns'): 'java.time.LocalTime',
     pa.timestamp('s'): '',
     pa.timestamp('ms'): '',
     pa.timestamp('us'): '',
     pa.timestamp('ns'): 'java.time.Instant',
     pa.date32(): '',
-    pa.date64(): '',
+    pa.date64(): 'java.time.LocalDate',
     pa.duration('s'): '',
     pa.duration('ms'): '',
     pa.duration('us'): '',
@@ -100,13 +100,10 @@ def to_table(pa_table: pa.Table, cols: List[str] = None) -> Table:
     dh_schema = pa.schema(dh_fields)
 
     try:
-        pa_buffer = dh_schema.serialize()
-        j_barrage_table_builder.setSchema(dtypes.array(dtypes.byte, pa_buffer))
+        j_barrage_table_builder.setSchema(jpy.byte_buffer(dh_schema.serialize()))
 
         record_batches = pa_table.to_batches()
-        for rb in record_batches:
-            pa_buffer = rb.serialize()
-            j_barrage_table_builder.addRecordBatch(dtypes.array(dtypes.byte, pa_buffer))
+        j_barrage_table_builder.addRecordBatches([jpy.byte_buffer(rb.serialize()) for rb in record_batches])
         j_barrage_table_builder.onCompleted()
 
         return Table(j_table=j_barrage_table_builder.getResultTable())

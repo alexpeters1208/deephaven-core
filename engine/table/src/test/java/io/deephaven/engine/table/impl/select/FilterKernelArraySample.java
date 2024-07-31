@@ -34,9 +34,9 @@ import io.deephaven.engine.rowset.TrackingWritableRowSet;
 import io.deephaven.engine.rowset.WritableRowSet;
 import io.deephaven.engine.table.ColumnSource;
 import io.deephaven.engine.table.Context;
-import io.deephaven.engine.table.DataColumn;
 import io.deephaven.engine.table.Table;
 import static io.deephaven.engine.table.impl.select.ConditionFilter.FilterKernel;
+import io.deephaven.engine.table.vectors.ColumnVectors;
 import io.deephaven.time.DateTimeUtils;
 import io.deephaven.util.datastructures.LongSizedDataStructure;
 import io.deephaven.util.type.ArrayTypeUtils;
@@ -66,6 +66,7 @@ import static io.deephaven.function.Sort.*;
 import static io.deephaven.gui.color.Color.*;
 
 import static io.deephaven.time.DateTimeUtils.*;
+import static io.deephaven.time.calendar.Calendars.*;
 import static io.deephaven.time.calendar.StaticCalendarMethods.*;
 import static io.deephaven.util.QueryConstants.*;
 
@@ -80,8 +81,8 @@ public class FilterKernelArraySample implements io.deephaven.engine.table.impl.s
     public FilterKernelArraySample(Table __table, RowSet __fullSet, QueryScopeParam... __params) {
 
         // Array Column Variables
-        v2_ = new io.deephaven.engine.table.impl.vector.DoubleVectorColumnWrapper(__table.getColumnSource("v2"), __fullSet);
-        v1_ = new io.deephaven.engine.table.impl.vector.ShortVectorColumnWrapper(__table.getColumnSource("v1"), __fullSet);
+        v2_ = new io.deephaven.engine.table.vectors.DoubleVectorColumnWrapper(__table.getColumnSource("v2"), __fullSet);
+        v1_ = new io.deephaven.engine.table.vectors.ShortVectorColumnWrapper(__table.getColumnSource("v1"), __fullSet);
     }
     @Override
     public Context getContext(int __maxChunkSize) {

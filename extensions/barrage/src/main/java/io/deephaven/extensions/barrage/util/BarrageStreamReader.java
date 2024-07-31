@@ -1,13 +1,11 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.extensions.barrage.util;
 
 import com.fasterxml.jackson.databind.util.ByteBufferBackedInputStream;
 import com.google.common.io.LittleEndianDataInputStream;
 import com.google.protobuf.CodedInputStream;
-import gnu.trove.iterator.TLongIterator;
-import gnu.trove.list.array.TLongArrayList;
 import io.deephaven.barrage.flatbuf.BarrageMessageType;
 import io.deephaven.barrage.flatbuf.BarrageMessageWrapper;
 import io.deephaven.barrage.flatbuf.BarrageModColumnMetadata;
@@ -21,21 +19,30 @@ import io.deephaven.engine.rowset.RowSetFactory;
 import io.deephaven.engine.rowset.RowSetShiftData;
 import io.deephaven.engine.table.impl.util.*;
 import io.deephaven.extensions.barrage.chunk.ChunkInputStreamGenerator;
+import io.deephaven.extensions.barrage.chunk.ChunkReader;
+import io.deephaven.extensions.barrage.chunk.DefaultChunkReadingFactory;
 import io.deephaven.util.datastructures.LongSizedDataStructure;
 import io.deephaven.chunk.ChunkType;
 import io.deephaven.internal.log.LoggerFactory;
 import io.deephaven.io.logger.Logger;
+import org.apache.arrow.flatbuf.Field;
 import org.apache.arrow.flatbuf.Message;
 import org.apache.arrow.flatbuf.MessageHeader;
 import org.apache.arrow.flatbuf.RecordBatch;
+import org.apache.arrow.flatbuf.Schema;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Iterator;
+import java.util.List;
+import java.util.PrimitiveIterator;
 import java.util.function.LongConsumer;
+
+import static io.deephaven.extensions.barrage.chunk.ChunkReader.typeInfo;
 
 public class BarrageStreamReader implements StreamReader {
 
@@ -53,13 +60,15 @@ public class BarrageStreamReader implements StreamReader {
 
     private BarrageMessage msg = null;
 
+    private final ChunkReader.Factory chunkReaderFactory = DefaultChunkReadingFactory.INSTANCE;
+    private final List<ChunkReader> readers = new ArrayList<>();
+
     public BarrageStreamReader(final LongConsumer deserializeTmConsumer) {
         this.deserializeTmConsumer = deserializeTmConsumer;
     }
 
     @Override
     public BarrageMessage safelyParseFrom(final StreamReaderOptions options,
-            final BitSet expectedColumns,
             final ChunkType[] columnChunkTypes,
             final Class<?>[] columnTypes,
             final Class<?>[] componentTypes,
@@ -198,7 +207,7 @@ public class BarrageStreamReader implements StreamReader {
                             new FlatBufferIteratorAdapter<>(batch.nodesLength(),
                                     i -> new ChunkInputStreamGenerator.FieldNodeInfo(batch.nodes(i)));
 
-                    final TLongArrayList bufferInfo = new TLongArrayList(batch.buffersLength());
+                    final long[] bufferInfo = new long[batch.buffersLength()];
                     for (int bi = 0; bi < batch.buffersLength(); ++bi) {
                         int offset = LongSizedDataStructure.intSize("BufferInfo", batch.buffers(bi).offset());
                         int length = LongSizedDataStructure.intSize("BufferInfo", batch.buffers(bi).length());
@@ -208,9 +217,9 @@ public class BarrageStreamReader implements StreamReader {
                             // our parsers handle overhanging buffers
                             length += Math.max(0, nextOffset - offset - length);
                         }
-                        bufferInfo.add(length);
+                        bufferInfo[bi] = length;
                     }
-                    final TLongIterator bufferInfoIter = bufferInfo.iterator();
+                    final PrimitiveIterator.OfLong bufferInfoIter = Arrays.stream(bufferInfo).iterator();
 
                     // add and mod rows are never combined in a batch. all added rows must be received before the first
                     // mod rows will be received.
@@ -240,9 +249,8 @@ public class BarrageStreamReader implements StreamReader {
 
                             // fill the chunk with data and assign back into the array
                             acd.data.set(lastChunkIndex,
-                                    ChunkInputStreamGenerator.extractChunkFromInputStream(options, columnChunkTypes[ci],
-                                            columnTypes[ci], componentTypes[ci], fieldNodeIter, bufferInfoIter, ois,
-                                            chunk, chunk.size(), (int) batch.length()));
+                                    readers.get(ci).readChunk(fieldNodeIter, bufferInfoIter, ois, chunk,
+                                            chunk.size(), (int) batch.length()));
                             chunk.setSize(chunk.size() + (int) batch.length());
                         }
                         numAddRowsRead += batch.length();
@@ -271,9 +279,8 @@ public class BarrageStreamReader implements StreamReader {
 
                             // fill the chunk with data and assign back into the array
                             mcd.data.set(lastChunkIndex,
-                                    ChunkInputStreamGenerator.extractChunkFromInputStream(options, columnChunkTypes[ci],
-                                            columnTypes[ci], componentTypes[ci], fieldNodeIter, bufferInfoIter, ois,
-                                            chunk, chunk.size(), numRowsToRead));
+                                    readers.get(ci).readChunk(fieldNodeIter, bufferInfoIter, ois, chunk,
+                                            chunk.size(), numRowsToRead));
                             chunk.setSize(chunk.size() + numRowsToRead);
                         }
                         numModRowsRead += batch.length();
@@ -282,7 +289,19 @@ public class BarrageStreamReader implements StreamReader {
             }
 
             if (header != null && header.headerType() == MessageHeader.Schema) {
-                // there is no body and our clients do not want to see schema messages
+                // there is no body and our clients do not want to see schema messages, consume the schema so that we
+                // can read the following messages and return null.
+                ByteBuffer original = header.getByteBuffer();
+                ByteBuffer copy = ByteBuffer.allocate(original.remaining()).put(original).rewind();
+                Schema schema = new Schema();
+                Message.getRootAsMessage(copy).header(schema);
+                header.header(schema);
+                for (int i = 0; i < schema.fieldsLength(); i++) {
+                    Field field = schema.fields(i);
+                    ChunkReader chunkReader = chunkReaderFactory.getReader(options,
+                            typeInfo(columnChunkTypes[i], columnTypes[i], componentTypes[i], field));
+                    readers.add(chunkReader);
+                }
                 return null;
             }
 

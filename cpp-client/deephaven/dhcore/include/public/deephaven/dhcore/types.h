@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+/*
+ * Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
  */
 #pragma once
 
@@ -8,9 +8,12 @@
 #include <cstdint>
 #include <ostream>
 #include "deephaven/dhcore/utility/utility.h"
+#include "deephaven/third_party/fmt/ostream.h"
 
 namespace deephaven::dhcore {
 struct ElementTypeId {
+  ElementTypeId() = delete;
+
   // We don't use "enum class" here because we can't figure out how to get it to work right with Cython.
   // TODO(kosak): we are going to have to expand LIST to be a true nested type.
   enum Enum {
@@ -68,8 +71,7 @@ void VisitElementTypeId(ElementTypeId::Enum type_id, T *visitor) {
       break;
     }
     default: {
-      auto message = deephaven::dhcore::utility::Stringf("Unrecognized ElementTypeId %o",
-          static_cast<int>(type_id));
+      auto message = fmt::format("Unrecognized ElementTypeId {}", static_cast<int>(type_id));
       throw std::runtime_error(message);
     }
   }
@@ -390,5 +392,15 @@ private:
   int64_t nanos_ = 0;
 
   friend std::ostream &operator<<(std::ostream &s, const DateTime &o);
+
+  friend bool operator==(const DateTime &lhs, const DateTime &rhs) {
+    return lhs.nanos_ == rhs.nanos_;
+  }
+
+  friend bool operator!=(const DateTime &lhs, const DateTime &rhs) {
+    return !(lhs == rhs);
+  }
 };
 }  // namespace deephaven::dhcore
+
+template<> struct fmt::formatter<deephaven::dhcore::DateTime> : ostream_formatter {};

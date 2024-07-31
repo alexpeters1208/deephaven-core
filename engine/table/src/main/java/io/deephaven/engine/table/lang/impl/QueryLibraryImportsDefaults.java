@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.lang.impl;
 
 import com.google.auto.service.AutoService;
@@ -13,15 +13,16 @@ import io.deephaven.engine.rowset.*;
 import io.deephaven.engine.rowset.chunkattributes.RowKeys;
 import io.deephaven.engine.table.ColumnSource;
 import io.deephaven.engine.table.Context;
-import io.deephaven.engine.table.DataColumn;
 import io.deephaven.engine.table.Table;
 import io.deephaven.engine.table.impl.lang.QueryLanguageFunctionUtils;
 import io.deephaven.engine.table.impl.select.ConditionFilter;
 import io.deephaven.engine.table.impl.verify.TableAssertions;
+import io.deephaven.engine.table.vectors.ColumnVectors;
 import io.deephaven.engine.util.ColorUtilImpl;
 import io.deephaven.function.*;
 import io.deephaven.gui.color.Color;
 import io.deephaven.time.DateTimeUtils;
+import io.deephaven.time.calendar.Calendars;
 import io.deephaven.time.calendar.StaticCalendarMethods;
 import io.deephaven.util.QueryConstants;
 import io.deephaven.util.datastructures.LongSizedDataStructure;
@@ -54,7 +55,6 @@ public class QueryLibraryImportsDefaults implements QueryLibraryImports {
                 Array.class,
                 TypeUtils.class,
                 Table.class,
-                DataColumn.class,
                 ArrayTypeUtils.class,
                 VectorConversions.class,
                 DateTimeUtils.class,
@@ -68,6 +68,7 @@ public class QueryLibraryImportsDefaults implements QueryLibraryImports {
                 Period.class,
                 QueryScopeParam.class,
                 ColumnSource.class,
+                ColumnVectors.class,
                 RowSet.class,
                 WritableRowSet.class,
                 TrackingRowSet.class,
@@ -119,6 +120,7 @@ public class QueryLibraryImportsDefaults implements QueryLibraryImports {
                 Color.class,
                 ColorUtilImpl.class,
                 TableAssertions.class,
+                Calendars.class,
                 StaticCalendarMethods.class));
     }
 }

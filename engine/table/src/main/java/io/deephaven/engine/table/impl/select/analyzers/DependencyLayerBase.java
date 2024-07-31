@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.select.analyzers;
 
 import io.deephaven.engine.table.ColumnDefinition;
@@ -34,14 +34,6 @@ public abstract class DependencyLayerBase extends SelectAndViewAnalyzer {
         final Set<String> remainingDepsToSatisfy = new HashSet<>(Arrays.asList(dependencies));
         inner.populateModifiedColumnSetRecurse(mcsBuilder, remainingDepsToSatisfy);
         this.myModifiedColumnSet = mcsBuilder;
-    }
-
-
-    @Override
-    public void updateColumnDefinitionsFromTopLayer(Map<String, ColumnDefinition<?>> columnDefinitions) {
-        final ColumnDefinition<?> cd =
-                ColumnDefinition.fromGenericType(name, columnSource.getType(), columnSource.getComponentType());
-        columnDefinitions.put(name, cd);
     }
 
     @Override

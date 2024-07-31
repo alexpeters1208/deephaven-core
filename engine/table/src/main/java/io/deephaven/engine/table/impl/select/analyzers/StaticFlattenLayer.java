@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.select.analyzers;
 
 import io.deephaven.base.log.LogOutput;
@@ -115,11 +115,6 @@ final public class StaticFlattenLayer extends SelectAndViewAnalyzer {
             return getLayerIndex();
         }
         return inner.getLayerIndexFor(column);
-    }
-
-    @Override
-    public void updateColumnDefinitionsFromTopLayer(Map<String, ColumnDefinition<?>> columnDefinitions) {
-        inner.updateColumnDefinitionsFromTopLayer(columnDefinitions);
     }
 
     @Override

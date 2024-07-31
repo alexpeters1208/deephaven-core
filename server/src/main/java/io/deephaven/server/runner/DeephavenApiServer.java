@@ -1,13 +1,12 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.server.runner;
 
 import io.deephaven.auth.AuthenticationRequestHandler;
 import io.deephaven.configuration.Configuration;
 import io.deephaven.engine.context.ExecutionContext;
 import io.deephaven.engine.liveness.LivenessScopeStack;
-import io.deephaven.engine.table.impl.OperationInitializationThreadPool;
 import io.deephaven.engine.table.impl.perf.QueryPerformanceRecorderState;
 import io.deephaven.engine.table.impl.util.AsyncErrorLogger;
 import io.deephaven.engine.table.impl.util.EngineMetrics;
@@ -19,15 +18,20 @@ import io.deephaven.engine.util.ScriptSession;
 import io.deephaven.internal.log.LoggerFactory;
 import io.deephaven.io.logger.Logger;
 import io.deephaven.server.appmode.ApplicationInjector;
+import io.deephaven.server.session.SessionFactoryCreator;
 import io.deephaven.server.config.ServerConfig;
 import io.deephaven.server.log.LogInit;
 import io.deephaven.server.plugin.PluginRegistration;
 import io.deephaven.server.session.SessionService;
 import io.deephaven.server.util.Scheduler;
+import io.deephaven.time.calendar.BusinessCalendar;
+import io.deephaven.time.calendar.Calendars;
 import io.deephaven.uri.resolver.UriResolver;
 import io.deephaven.uri.resolver.UriResolvers;
 import io.deephaven.uri.resolver.UriResolversInstance;
 import io.deephaven.util.SafeCloseable;
+import io.deephaven.util.annotations.InternalUseOnly;
+import io.deephaven.util.annotations.ScriptApi;
 import io.deephaven.util.annotations.VisibleForTesting;
 import io.deephaven.util.process.ProcessEnvironment;
 import io.deephaven.util.process.ShutdownManager;
@@ -36,7 +40,10 @@ import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Provider;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -51,9 +58,39 @@ public class DeephavenApiServer {
             Configuration.getInstance().getLongForClassWithDefault(
                     DeephavenApiServer.class, "checkScopeChangesIntervalMillis", 100);
 
+    private static DeephavenApiServer INSTANCE;
+
+    @InternalUseOnly
+    public static DeephavenApiServer getInstance() {
+        synchronized (DeephavenApiServer.class) {
+            return Objects.requireNonNull(INSTANCE);
+        }
+    }
+
+    private static void setInstance(DeephavenApiServer instance) {
+        Objects.requireNonNull(instance);
+        synchronized (DeephavenApiServer.class) {
+            if (INSTANCE != null) {
+                throw new IllegalStateException();
+            }
+            INSTANCE = instance;
+        }
+    }
+
+    private static void clearInstance(DeephavenApiServer expected) {
+        Objects.requireNonNull(expected);
+        synchronized (DeephavenApiServer.class) {
+            if (INSTANCE != expected) {
+                throw new IllegalStateException();
+            }
+            INSTANCE = null;
+        }
+    }
+
     private final GrpcServer server;
     private final UpdateGraph ug;
     private final LogInit logInit;
+    private final Provider<Set<BusinessCalendar>> calendars;
     private final Scheduler scheduler;
     private final Provider<ScriptSession> scriptSessionProvider;
     private final PluginRegistration pluginRegistration;
@@ -63,12 +100,14 @@ public class DeephavenApiServer {
     private final Map<String, AuthenticationRequestHandler> authenticationHandlers;
     private final Provider<ExecutionContext> executionContextProvider;
     private final ServerConfig serverConfig;
+    private final SessionFactoryCreator sessionFactoryCreator;
 
     @Inject
     public DeephavenApiServer(
             final GrpcServer server,
             @Named(PeriodicUpdateGraph.DEFAULT_UPDATE_GRAPH_NAME) final UpdateGraph ug,
             final LogInit logInit,
+            final Provider<Set<BusinessCalendar>> calendars,
             final Scheduler scheduler,
             final Provider<ScriptSession> scriptSessionProvider,
             final PluginRegistration pluginRegistration,
@@ -77,10 +116,12 @@ public class DeephavenApiServer {
             final SessionService sessionService,
             final Map<String, AuthenticationRequestHandler> authenticationHandlers,
             final Provider<ExecutionContext> executionContextProvider,
-            final ServerConfig serverConfig) {
+            final ServerConfig serverConfig,
+            final SessionFactoryCreator sessionFactoryCreator) {
         this.server = server;
         this.ug = ug;
         this.logInit = logInit;
+        this.calendars = calendars;
         this.scheduler = scheduler;
         this.scriptSessionProvider = scriptSessionProvider;
         this.pluginRegistration = pluginRegistration;
@@ -90,6 +131,7 @@ public class DeephavenApiServer {
         this.authenticationHandlers = authenticationHandlers;
         this.executionContextProvider = executionContextProvider;
         this.serverConfig = serverConfig;
+        this.sessionFactoryCreator = sessionFactoryCreator;
     }
 
     @VisibleForTesting
@@ -102,7 +144,6 @@ public class DeephavenApiServer {
         return sessionService;
     }
 
-
     /**
      * Starts the various server components, and returns without blocking. Shutdown is mediated by the ShutdownManager,
      * who will call the gRPC server to shut it down when the process is itself shutting down.
@@ -112,6 +153,7 @@ public class DeephavenApiServer {
      * @throws ClassNotFoundException thrown if a class can't be found while finding and running an application.
      */
     public DeephavenApiServer run() throws IOException, ClassNotFoundException, TimeoutException {
+        setInstance(this);
 
         // Prevent new gRPC calls from being started
         ProcessEnvironment.getGlobalShutdownManager().registerTask(ShutdownManager.OrderingCategory.FIRST,
@@ -124,8 +166,10 @@ public class DeephavenApiServer {
         // Finally, wait for the http server to be finished stopping
         ProcessEnvironment.getGlobalShutdownManager().registerTask(ShutdownManager.OrderingCategory.LAST, () -> {
             try {
-                server.stopWithTimeout(10, TimeUnit.SECONDS);
+                final Duration duration = serverConfig.shutdownTimeout();
+                server.stopWithTimeout(duration.toNanos(), TimeUnit.NANOSECONDS);
                 server.join();
+                clearInstance(DeephavenApiServer.this);
             } catch (final InterruptedException ignored) {
             }
         });
@@ -133,8 +177,9 @@ public class DeephavenApiServer {
         log.info().append("Configuring logging...").endl();
         logInit.run();
 
-        log.info().append("Creating/Clearing Script Cache...").endl();
-        AbstractScriptSession.createScriptCache();
+        for (BusinessCalendar calendar : calendars.get()) {
+            Calendars.addCalendar(calendar);
+        }
 
         log.info().append("Initializing Script Session...").endl();
         checkScopeChanges(scriptSessionProvider.get());
@@ -143,9 +188,6 @@ public class DeephavenApiServer {
         log.info().append("Initializing Execution Context for Main Thread...").endl();
         // noinspection resource
         executionContextProvider.get().open();
-
-        log.info().append("Starting Operation Initialization Thread Pool...").endl();
-        OperationInitializationThreadPool.start();
 
         log.info().append("Starting Update Graph...").endl();
         getUpdateGraph().<PeriodicUpdateGraph>cast().start();
@@ -194,8 +236,8 @@ public class DeephavenApiServer {
         server.join();
     }
 
-
     void startForUnitTests() throws Exception {
+        setInstance(this);
         pluginRegistration.registerAll();
         applicationInjector.run();
         executionContextProvider.get().getQueryLibrary().updateVersionString("DEFAULT");
@@ -204,7 +246,23 @@ public class DeephavenApiServer {
         server.start();
     }
 
+    void teardownForUnitTests() throws InterruptedException {
+        try {
+            server.stopWithTimeout(5, TimeUnit.SECONDS);
+            server.join();
+        } finally {
+            clearInstance(this);
+        }
+    }
+
+    @VisibleForTesting
     public UpdateGraph getUpdateGraph() {
         return ug;
+    }
+
+    @InternalUseOnly
+    @ScriptApi
+    public SessionFactoryCreator sessionFactoryCreator() {
+        return sessionFactoryCreator;
     }
 }

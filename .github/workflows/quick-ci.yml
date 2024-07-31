@@ -2,7 +2,7 @@ name: Quick CI
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ 'main', 'rc/v*' ]
   push:
     branches: [ 'main', 'check/**', 'release/v*' ]
 
@@ -22,7 +22,7 @@ jobs:
 
       - name: Setup JDK 11
         id: setup-java-11
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '11'
@@ -44,9 +44,24 @@ jobs:
           gradle-version: wrapper
 
       - name: Upload JVM Error Logs
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: quick-ci-jvm-err
           path: '**/*_pid*.log'
           if-no-files-found: ignore
+
+  verify-python-min-version:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install vermin
+        run: pip install vermin==1.6.0
+
+      - name: Verify minimum version support
+        run: vermin -t=3.8 --no-tips --eval-annotations --violations py/server/deephaven py/client py/client-ticking py/embedded-server

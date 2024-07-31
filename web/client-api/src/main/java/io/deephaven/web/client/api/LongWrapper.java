@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.web.client.api;
 
 import jsinterop.annotations.JsIgnore;
@@ -40,5 +40,17 @@ public class LongWrapper {
     @Override
     public String toString() {
         return String.valueOf(value);
+    }
+
+    @JsIgnore
+    @Override
+    public boolean equals(Object obj) {
+        return obj instanceof LongWrapper && ((LongWrapper) obj).value == value;
+    }
+
+    @JsIgnore
+    @Override
+    public int hashCode() {
+        return Long.hashCode(value);
     }
 }

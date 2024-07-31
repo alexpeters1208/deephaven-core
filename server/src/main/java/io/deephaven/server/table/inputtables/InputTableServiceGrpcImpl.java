@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.server.table.inputtables;
 
 import com.google.rpc.Code;
@@ -10,7 +10,8 @@ import io.deephaven.engine.table.Table;
 import io.deephaven.engine.table.TableDefinition;
 import io.deephaven.engine.table.impl.perf.QueryPerformanceNugget;
 import io.deephaven.engine.table.impl.perf.QueryPerformanceRecorder;
-import io.deephaven.engine.util.config.MutableInputTable;
+import io.deephaven.engine.util.input.InputTableStatusListener;
+import io.deephaven.engine.util.input.InputTableUpdater;
 import io.deephaven.extensions.barrage.util.GrpcUtil;
 import io.deephaven.internal.log.LoggerFactory;
 import io.deephaven.io.logger.Logger;
@@ -70,17 +71,16 @@ public class InputTableServiceGrpcImpl extends InputTableServiceGrpc.InputTableS
 
             session.nonExport()
                     .queryPerformanceRecorder(queryPerformanceRecorder)
-                    .requiresSerialQueue()
                     .onError(responseObserver)
                     .require(targetTable, tableToAddExport)
                     .submit(() -> {
-                        Object inputTable = targetTable.get().getAttribute(Table.INPUT_TABLE_ATTRIBUTE);
-                        if (!(inputTable instanceof MutableInputTable)) {
+                        Object inputTableAsObject = targetTable.get().getAttribute(Table.INPUT_TABLE_ATTRIBUTE);
+                        if (!(inputTableAsObject instanceof InputTableUpdater)) {
                             throw Exceptions.statusRuntimeException(Code.INVALID_ARGUMENT,
                                     "Table can't be used as an input table");
                         }
 
-                        MutableInputTable mutableInputTable = (MutableInputTable) inputTable;
+                        final InputTableUpdater inputTableUpdater = (InputTableUpdater) inputTableAsObject;
                         Table tableToAdd = tableToAddExport.get();
 
                         authWiring.checkPermissionAddTableToInputTable(
@@ -89,20 +89,25 @@ public class InputTableServiceGrpcImpl extends InputTableServiceGrpc.InputTableS
 
                         // validate that the columns are compatible
                         try {
-                            mutableInputTable.validateAddOrModify(tableToAdd);
+                            inputTableUpdater.validateAddOrModify(tableToAdd);
                         } catch (TableDefinition.IncompatibleTableDefinitionException exception) {
                             throw Exceptions.statusRuntimeException(Code.INVALID_ARGUMENT,
                                     "Provided tables's columns are not compatible: " + exception.getMessage());
                         }
 
                         // actually add the tables contents
-                        try {
-                            mutableInputTable.add(tableToAdd);
-                            GrpcUtil.safelyComplete(responseObserver, AddTableResponse.getDefaultInstance());
-                        } catch (IOException ioException) {
-                            throw Exceptions.statusRuntimeException(Code.DATA_LOSS,
-                                    "Error adding table to input table");
-                        }
+                        inputTableUpdater.addAsync(tableToAdd, new InputTableStatusListener() {
+                            @Override
+                            public void onSuccess() {
+                                GrpcUtil.safelyComplete(responseObserver, AddTableResponse.getDefaultInstance());
+                            }
+
+                            @Override
+                            public void onError(Throwable t) {
+                                GrpcUtil.safelyError(responseObserver, Exceptions.statusRuntimeException(Code.DATA_LOSS,
+                                        "Error adding table to input table"));
+                            }
+                        });
                     });
         }
     }
@@ -128,17 +133,16 @@ public class InputTableServiceGrpcImpl extends InputTableServiceGrpc.InputTableS
 
             session.nonExport()
                     .queryPerformanceRecorder(queryPerformanceRecorder)
-                    .requiresSerialQueue()
                     .onError(responseObserver)
                     .require(targetTable, tableToRemoveExport)
                     .submit(() -> {
-                        Object inputTable = targetTable.get().getAttribute(Table.INPUT_TABLE_ATTRIBUTE);
-                        if (!(inputTable instanceof MutableInputTable)) {
+                        Object inputTableAsObject = targetTable.get().getAttribute(Table.INPUT_TABLE_ATTRIBUTE);
+                        if (!(inputTableAsObject instanceof InputTableUpdater)) {
                             throw Exceptions.statusRuntimeException(Code.INVALID_ARGUMENT,
                                     "Table can't be used as an input table");
                         }
 
-                        MutableInputTable mutableInputTable = (MutableInputTable) inputTable;
+                        final InputTableUpdater inputTableUpdater = (InputTableUpdater) inputTableAsObject;
                         Table tableToRemove = tableToRemoveExport.get();
 
                         authWiring.checkPermissionDeleteTableFromInputTable(
@@ -147,7 +151,7 @@ public class InputTableServiceGrpcImpl extends InputTableServiceGrpc.InputTableS
 
                         // validate that the columns are compatible
                         try {
-                            mutableInputTable.validateDelete(tableToRemove);
+                            inputTableUpdater.validateDelete(tableToRemove);
                         } catch (TableDefinition.IncompatibleTableDefinitionException exception) {
                             throw Exceptions.statusRuntimeException(Code.INVALID_ARGUMENT,
                                     "Provided tables's columns are not compatible: " + exception.getMessage());
@@ -157,13 +161,18 @@ public class InputTableServiceGrpcImpl extends InputTableServiceGrpc.InputTableS
                         }
 
                         // actually delete the table's contents
-                        try {
-                            mutableInputTable.delete(tableToRemove);
-                            GrpcUtil.safelyComplete(responseObserver, DeleteTableResponse.getDefaultInstance());
-                        } catch (IOException ioException) {
-                            throw Exceptions.statusRuntimeException(Code.DATA_LOSS,
-                                    "Error deleting table from inputtable");
-                        }
+                        inputTableUpdater.deleteAsync(tableToRemove, new InputTableStatusListener() {
+                            @Override
+                            public void onSuccess() {
+                                GrpcUtil.safelyComplete(responseObserver, DeleteTableResponse.getDefaultInstance());
+                            }
+
+                            @Override
+                            public void onError(Throwable t) {
+                                GrpcUtil.safelyError(responseObserver, Exceptions.statusRuntimeException(Code.DATA_LOSS,
+                                        "Error deleting table from inputtable"));
+                            }
+                        });
                     });
         }
     }

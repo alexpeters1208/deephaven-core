@@ -1,20 +1,12 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.server.netty;
 
 import dagger.Component;
 import dagger.Module;
 import dagger.Provides;
-import io.deephaven.server.arrow.ArrowModule;
-import io.deephaven.server.config.ConfigServiceModule;
-import io.deephaven.server.console.ConsoleModule;
-import io.deephaven.server.log.LogModule;
 import io.deephaven.server.runner.ExecutionContextUnitTestModule;
-import io.deephaven.server.session.ObfuscatingErrorTransformerModule;
-import io.deephaven.server.session.SessionModule;
-import io.deephaven.server.table.TableModule;
-import io.deephaven.server.test.TestAuthModule;
 import io.deephaven.server.test.FlightMessageRoundTripTest;
 
 import javax.inject.Singleton;
@@ -36,18 +28,10 @@ public class NettyFlightRoundTripTest extends FlightMessageRoundTripTest {
 
     @Singleton
     @Component(modules = {
-            ArrowModule.class,
-            ConfigServiceModule.class,
-            ConsoleModule.class,
             ExecutionContextUnitTestModule.class,
             FlightTestModule.class,
-            LogModule.class,
             NettyServerModule.class,
             NettyTestConfig.class,
-            SessionModule.class,
-            TableModule.class,
-            TestAuthModule.class,
-            ObfuscatingErrorTransformerModule.class,
     })
     public interface NettyTestComponent extends TestComponent {
     }

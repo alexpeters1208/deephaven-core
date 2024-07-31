@@ -5,11 +5,14 @@ Deephaven Python Client is a Python package created by Deephaven Data Labs. It i
 
 ## Source Directory
 
-### From the deephaven-core repository root 
+### From the deephaven-core repository root
 (clone from https://github.com/deephaven/deephaven-core)
+
+## Change to the py/client directory inside the deephaven-core repository
 ``` shell
 $ cd py/client
 ```
+
 ## Dev environment setup
 ``` shell
 $ pip3 install -r requirements-dev.txt
@@ -17,8 +20,9 @@ $ pip3 install -r requirements-dev.txt
 
 ## Build
 ``` shell
-$ python3 setup.py bdist_wheel
+$ DEEPHAVEN_VERSION=$(../../gradlew :printVersion -q) python3 setup.py bdist_wheel
 ```
+
 ## Run tests
 ``` shell
 $ python3 -m unittest discover tests
@@ -38,7 +42,7 @@ $ python3 -m examples.demo_asof_join
 Note the actual name of the `.whl` file may be different depending on system details.
 
 ``` shell
-$ pip3 install dist/pydeephaven-0.31.0-py3-none-any.whl
+$ pip3 install dist/pydeephaven-<x.y.z>-py3-none-any.whl
 ```
 ## Quick start
 

@@ -17,7 +17,7 @@
 # -- Project information -----------------------------------------------------
 
 project = 'Deephaven'
-copyright = '2021, Deephaven Data Labs'
+copyright = '2024, Deephaven Data Labs'
 author = 'Deephaven Data Labs'
 
 # The full version, including alpha/beta/rc tags
@@ -105,11 +105,20 @@ jvm.init_jvm(
 
 import jpy
 py_scope_jpy = jpy.get_type("io.deephaven.engine.util.PythonScopeJpyImpl").ofMainGlobals()
+
+no_op_thread_factory = jpy.get_type("io.deephaven.util.thread.ThreadInitializationFactory").NO_OP
+_JOperationInitializationThreadPool = jpy.get_type("io.deephaven.engine.table.impl.OperationInitializationThreadPool")
+_j_operation_initializer = _JOperationInitializationThreadPool(no_op_thread_factory)
+
 _JUpdateGraph = jpy.get_type("io.deephaven.engine.updategraph.impl.PeriodicUpdateGraph")
-docs_update_graph = _JUpdateGraph.newBuilder("PYTHON_DOCS").build()
+docs_update_graph = _JUpdateGraph.newBuilder("PYTHON_DOCS") \
+        .operationInitializer(_j_operation_initializer) \
+        .build()
+
 _JPythonScriptSession = jpy.get_type("io.deephaven.integrations.python.PythonDeephavenSession")
-py_dh_session = _JPythonScriptSession(docs_update_graph, py_scope_jpy)
+py_dh_session = _JPythonScriptSession(docs_update_graph, _j_operation_initializer, no_op_thread_factory, py_scope_jpy)
 py_dh_session.getExecutionContext().open()
+
 
 pygments_style = 'sphinx'
 

@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.util;
 
 import io.deephaven.chunk.WritableChunk;
@@ -25,13 +25,13 @@ class QueryOperationPerformanceStreamPublisher implements StreamPublisher {
             ColumnDefinition.ofInt("OperationNumber"),
             ColumnDefinition.ofInt("ParentOperationNumber"),
             ColumnDefinition.ofInt("Depth"),
-            ColumnDefinition.ofString("Description"),
             ColumnDefinition.ofString("SessionId"),
+            ColumnDefinition.ofString("Description"),
             ColumnDefinition.ofString("CallerLine"),
             ColumnDefinition.ofBoolean("IsCompilation"),
             ColumnDefinition.ofTime("StartTime"),
             ColumnDefinition.ofTime("EndTime"),
-            ColumnDefinition.ofLong("DurationNanos"),
+            ColumnDefinition.ofLong("UsageNanos"),
             ColumnDefinition.ofLong("CpuNanos"),
             ColumnDefinition.ofLong("UserCpuNanos"),
             ColumnDefinition.ofLong("FreeMemory"),
@@ -83,17 +83,17 @@ class QueryOperationPerformanceStreamPublisher implements StreamPublisher {
         // ColumnDefinition.ofInt("Depth"),
         chunks[4].asWritableIntChunk().add(nugget.getDepth());
 
-        // ColumnDefinition.ofString("Description"),
-        chunks[5].<String>asWritableObjectChunk().add(nugget.getDescription());
-
         // ColumnDefinition.ofString("SessionId"),
-        chunks[6].<String>asWritableObjectChunk().add(nugget.getSessionId());
+        chunks[5].<String>asWritableObjectChunk().add(nugget.getSessionId());
+
+        // ColumnDefinition.ofString("Description"),
+        chunks[6].<String>asWritableObjectChunk().add(nugget.getDescription());
 
         // ColumnDefinition.ofString("CallerLine"),
         chunks[7].<String>asWritableObjectChunk().add(nugget.getCallerLine());
 
         // ColumnDefinition.ofBoolean("IsCompilation"),
-        chunks[8].asWritableByteChunk().add(BooleanUtils.booleanAsByte(nugget.getDescription().startsWith("Compile:")));
+        chunks[8].asWritableByteChunk().add(BooleanUtils.booleanAsByte(nugget.isCompilation()));
 
         // ColumnDefinition.ofTime("StartTime"),
         chunks[9].asWritableLongChunk().add(nugget.getStartClockEpochNanos());
@@ -101,7 +101,7 @@ class QueryOperationPerformanceStreamPublisher implements StreamPublisher {
         // ColumnDefinition.ofTime("EndTime"),
         chunks[10].asWritableLongChunk().add(nugget.getEndClockEpochNanos());
 
-        // ColumnDefinition.ofLong("DurationNanos"),
+        // ColumnDefinition.ofLong("UsageNanos"),
         chunks[11].asWritableLongChunk().add(nugget.getUsageNanos());
 
         // ColumnDefinition.ofLong("CpuNanos"),

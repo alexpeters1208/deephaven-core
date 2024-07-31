@@ -1,12 +1,10 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.select.analyzers;
 
 import io.deephaven.base.log.LogOutput;
-import io.deephaven.datastructures.util.CollectionUtil;
 import io.deephaven.engine.liveness.LivenessNode;
-import io.deephaven.engine.table.ColumnDefinition;
 import io.deephaven.engine.table.TableUpdate;
 import io.deephaven.engine.table.ModifiedColumnSet;
 import io.deephaven.engine.table.ColumnSource;
@@ -46,7 +44,7 @@ public class BaseLayer extends SelectAndViewAnalyzer {
 
     @Override
     void populateModifiedColumnSetRecurse(ModifiedColumnSet mcsBuilder, Set<String> remainingDepsToSatisfy) {
-        mcsBuilder.setAll(remainingDepsToSatisfy.toArray(CollectionUtil.ZERO_LENGTH_STRING_ARRAY));
+        mcsBuilder.setAll(remainingDepsToSatisfy.toArray(String[]::new));
     }
 
     @Override
@@ -57,16 +55,6 @@ public class BaseLayer extends SelectAndViewAnalyzer {
             result.putAll(sources);
         }
         return result;
-    }
-
-    @Override
-    public void updateColumnDefinitionsFromTopLayer(Map<String, ColumnDefinition<?>> columnDefinitions) {
-        for (Map.Entry<String, ColumnSource<?>> entry : sources.entrySet()) {
-            final String name = entry.getKey();
-            final ColumnSource<?> cs = entry.getValue();
-            final ColumnDefinition<?> cd = ColumnDefinition.fromGenericType(name, cs.getType(), cs.getComponentType());
-            columnDefinitions.put(name, cd);
-        }
     }
 
     @Override

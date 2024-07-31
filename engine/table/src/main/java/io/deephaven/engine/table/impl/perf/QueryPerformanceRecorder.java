@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.perf;
 
 import io.deephaven.util.QueryConstants;
@@ -52,6 +52,16 @@ public interface QueryPerformanceRecorder {
      *         must be called on the nugget.
      */
     QueryPerformanceNugget getNugget(@NotNull String name, long inputSize);
+
+    /**
+     * Create a nugget at the top of the user stack for a compilation task. May return a
+     * {@link QueryPerformanceNugget#DUMMY_NUGGET} if no recorder is installed.
+     *
+     * @param name the nugget name
+     * @return A new QueryPerformanceNugget to encapsulate the compilation. {@link QueryPerformanceNugget#close()} must
+     *         be called on the nugget.
+     */
+    QueryPerformanceNugget getCompilationNugget(@NotNull String name);
 
     /**
      * This is the nugget enclosing the current operation. It may belong to the dummy recorder, or a real one.
@@ -156,6 +166,16 @@ public interface QueryPerformanceRecorder {
             @Nullable final QueryPerformanceRecorder parent,
             @NotNull final QueryPerformanceNugget.Factory nuggetFactory) {
         return new QueryPerformanceRecorderImpl(description, null, parent, nuggetFactory);
+    }
+
+    /**
+     * Record a single-threaded operation's allocations as "pool" allocated memory attributable to the current thread.
+     *
+     * @param operation The operation to record allocation for
+     * @return The result of the operation.
+     */
+    static <RESULT_TYPE> RESULT_TYPE recordPoolAllocation(@NotNull final Supplier<RESULT_TYPE> operation) {
+        return QueryPerformanceRecorderState.recordPoolAllocation(operation);
     }
 
     /**

@@ -1,3 +1,6 @@
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.rangejoin;
 
 import io.deephaven.api.ColumnName;
@@ -26,7 +29,6 @@ import io.deephaven.engine.rowset.RowSet;
 import io.deephaven.engine.rowset.RowSetFactory;
 import io.deephaven.engine.table.*;
 import io.deephaven.engine.table.impl.MemoizedOperationKey;
-import io.deephaven.engine.table.impl.OperationInitializationThreadPool;
 import io.deephaven.engine.table.impl.QueryTable;
 import io.deephaven.engine.table.impl.SortingOrder;
 import io.deephaven.engine.table.impl.OperationSnapshotControl;
@@ -253,14 +255,13 @@ public class RangeJoinOperation implements QueryTable.MemoizableOperation<QueryT
         QueryTable.checkInitiateBinaryOperation(leftTable, rightTable);
 
         final JobScheduler jobScheduler;
-        if (OperationInitializationThreadPool.canParallelize()) {
-            jobScheduler = new OperationInitializationPoolJobScheduler();
+        if (ExecutionContext.getContext().getOperationInitializer().canParallelize()) {
+            jobScheduler = new OperationInitializerJobScheduler();
         } else {
-            jobScheduler = ImmediateJobScheduler.INSTANCE;
+            jobScheduler = new ImmediateJobScheduler();
         }
 
         final ExecutionContext executionContext = ExecutionContext.newBuilder()
-                .captureUpdateGraph()
                 .markSystemic().build();
 
         return new Result<>(staticRangeJoin(jobScheduler, executionContext));

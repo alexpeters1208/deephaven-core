@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2023 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.time;
 
 import io.deephaven.base.clock.Clock;
@@ -21,12 +21,10 @@ import java.time.temporal.ChronoField;
 import java.time.zone.ZoneRulesException;
 import java.util.Date;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static io.deephaven.util.QueryConstants.NULL_INT;
-import static io.deephaven.util.QueryConstants.NULL_LONG;
+import static io.deephaven.util.QueryConstants.*;
 import static java.time.format.DateTimeFormatter.*;
 
 /**
@@ -82,6 +80,13 @@ public class DateTimeUtils {
      */
     private static final Pattern DATE_TZ_PATTERN = Pattern.compile(
             "(?<date>[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])(?<t>[tT]?) (?<timezone>[a-zA-Z_/]+)");
+
+    /**
+     * Matches dates without time zones.
+     */
+    private static final Pattern LOCAL_DATE_PATTERN = Pattern.compile(
+            "(?<date>[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])(?<t>[tT]?)");
+
 
     /**
      * Matches time durations.
@@ -314,8 +319,8 @@ public class DateTimeUtils {
      * @return the current clock
      * @see #setClock(Clock)
      */
-    @NotNull
     @ScriptApi
+    @NotNull
     public static Clock currentClock() {
         return Objects.requireNonNullElse(clock, Clock.system());
     }
@@ -385,8 +390,9 @@ public class DateTimeUtils {
     private abstract static class CachedDate {
 
         final ZoneId timeZone;
-        String value;
-        long valueExpirationTimeMillis;
+        volatile LocalDate date;
+        volatile String str;
+        volatile long valueExpirationTimeMillis;
 
         private CachedDate(@NotNull final ZoneId timeZone) {
             this.timeZone = timeZone;
@@ -397,17 +403,29 @@ public class DateTimeUtils {
             return timeZone;
         }
 
-        public String get() {
-            return get(currentClock().currentTimeMillis());
+        public LocalDate getLocalDate() {
+            return getLocalDate(currentClock().currentTimeMillis());
         }
 
-        public synchronized String get(final long currentTimeMillis) {
+        public LocalDate getLocalDate(final long currentTimeMillis) {
             if (currentTimeMillis >= valueExpirationTimeMillis) {
                 update(currentTimeMillis);
             }
-            return value;
+            return date;
         }
 
+        public String getStr() {
+            return getStr(currentClock().currentTimeMillis());
+        }
+
+        public synchronized String getStr(final long currentTimeMillis) {
+            if (currentTimeMillis >= valueExpirationTimeMillis) {
+                update(currentTimeMillis);
+            }
+            return str;
+        }
+
+        // Update methods should be synchronized!
         abstract void update(long currentTimeMillis);
     }
 
@@ -418,10 +436,10 @@ public class DateTimeUtils {
         }
 
         @Override
-        void update(final long currentTimeMillis) {
-            value = formatDate(epochMillisToInstant(currentTimeMillis), timeZone);
-            valueExpirationTimeMillis =
-                    epochMillis(atMidnight(epochNanosToInstant(millisToNanos(currentTimeMillis) + DAY), timeZone));
+        synchronized void update(final long currentTimeMillis) {
+            date = toLocalDate(epochMillisToInstant(currentTimeMillis), timeZone);
+            str = formatDate(date);
+            valueExpirationTimeMillis = epochMillis(date.plusDays(1).atStartOfDay(timeZone));
         }
     }
 
@@ -437,20 +455,29 @@ public class DateTimeUtils {
     private static final KeyedObjectHashMap<ZoneId, CachedCurrentDate> cachedCurrentDates =
             new KeyedObjectHashMap<>(new CachedDateKey<>());
 
+    private static CachedCurrentDate getCachedCurrentDate(@NotNull final ZoneId timeZone) {
+        return cachedCurrentDates.putIfAbsent(timeZone, CachedCurrentDate::new);
+    }
+
     /**
      * Provides the current date string according to the {@link #currentClock() current clock}. Under most
      * circumstances, this method will return the date according to current system time, but during replay simulations,
      * this method can return the date according to replay time.
      *
      * @param timeZone the time zone
-     * @return the current date according to the current clock and time zone formatted as "yyyy-MM-dd"
+     * @return the current date according to the current clock and time zone formatted as "yyyy-MM-dd". {@code null} if
+     *         the input is {@code null}.
      * @see #currentClock()
      * @see #setClock(Clock)
      */
     @ScriptApi
-    @NotNull
-    public static String today(@NotNull final ZoneId timeZone) {
-        return cachedCurrentDates.putIfAbsent(timeZone, CachedCurrentDate::new).get();
+    @Nullable
+    public static String today(@Nullable final ZoneId timeZone) {
+        if (timeZone == null) {
+            return null;
+        }
+
+        return getCachedCurrentDate(timeZone).getStr();
     }
 
     /**
@@ -467,7 +494,47 @@ public class DateTimeUtils {
     @ScriptApi
     @NotNull
     public static String today() {
+        // noinspection ConstantConditions
         return today(DateTimeUtils.timeZone());
+    }
+
+    /**
+     * Provides the current date according to the {@link #currentClock() current clock}. Under most circumstances, this
+     * method will return the date according to current system time, but during replay simulations, this method can
+     * return the date according to replay time.
+     *
+     * @param timeZone the time zone
+     * @return the current date according to the current clock and time zone formatted as "yyyy-MM-dd". {@code null} if
+     *         the input is {@code null}.
+     * @see #currentClock()
+     * @see #setClock(Clock)
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDate todayLocalDate(@Nullable final ZoneId timeZone) {
+        if (timeZone == null) {
+            return null;
+        }
+
+        return getCachedCurrentDate(timeZone).getLocalDate();
+    }
+
+    /**
+     * Provides the current date according to the {@link #currentClock() current clock} and the
+     * {@link ZoneId#systemDefault() default time zone}. Under most circumstances, this method will return the date
+     * according to current system time, but during replay simulations, this method can return the date according to
+     * replay time.
+     *
+     * @return the current date according to the current clock and default time zone formatted as "yyyy-MM-dd"
+     * @see #currentClock()
+     * @see #setClock(Clock)
+     * @see ZoneId#systemDefault()
+     */
+    @ScriptApi
+    @NotNull
+    public static LocalDate todayLocalDate() {
+        // noinspection ConstantConditions
+        return todayLocalDate(DateTimeUtils.timeZone());
     }
 
     // endregion
@@ -478,12 +545,17 @@ public class DateTimeUtils {
      * Gets the time zone for a time zone name.
      *
      * @param timeZone the time zone name
-     * @return the corresponding time zone
-     * @throws NullPointerException if {@code timeZone} is {@code null}
+     * @return the corresponding time zone. {@code null} if the input is {@code null}.
      * @throws DateTimeException if {@code timeZone} has an invalid format
      * @throws ZoneRulesException if {@code timeZone} cannot be found
      */
-    public static ZoneId timeZone(@NotNull String timeZone) {
+    @ScriptApi
+    @Nullable
+    public static ZoneId timeZone(@Nullable String timeZone) {
+        if (timeZone == null) {
+            return null;
+        }
+
         return TimeZoneAliases.zoneId(timeZone);
     }
 
@@ -493,6 +565,7 @@ public class DateTimeUtils {
      * @return the system default time zone
      * @see ZoneId#systemDefault()
      */
+    @ScriptApi
     public static ZoneId timeZone() {
         return ZoneId.systemDefault();
     }
@@ -504,6 +577,7 @@ public class DateTimeUtils {
      * @param timeZone the time zone id name
      * @throws IllegalArgumentException if the alias already exists or the time zone is invalid
      */
+    @ScriptApi
     public static void timeZoneAliasAdd(@NotNull final String alias, @NotNull final String timeZone) {
         TimeZoneAliases.addAlias(alias, timeZone);
     }
@@ -514,6 +588,7 @@ public class DateTimeUtils {
      * @param alias the alias name
      * @return whether {@code alias} was present
      */
+    @ScriptApi
     public static boolean timeZoneAliasRm(@NotNull final String alias) {
         return TimeZoneAliases.rmAlias(alias);
     }
@@ -737,6 +812,27 @@ public class DateTimeUtils {
     }
 
     /**
+     * Converts a {@link LocalDateTime} and {@link ZoneId} to an {@link Instant}.
+     *
+     * @param localDateTime the local date time
+     * @param timeZone the time zone
+     * @return the {@link Instant}, or {@code null} if any input is {@code null}
+     */
+    @ScriptApi
+    @Nullable
+    public static Instant toInstant(
+            @Nullable final LocalDateTime localDateTime,
+            @Nullable final ZoneId timeZone) {
+        if (localDateTime == null || timeZone == null) {
+            return null;
+        }
+
+        return localDateTime // LocalDateTime
+                .atZone(timeZone) // ZonedDateTime
+                .toInstant(); // Instant
+    }
+
+    /**
      * Converts a {@link LocalDate}, {@link LocalTime}, and {@link ZoneId} to an {@link Instant}.
      *
      * @param date the local date
@@ -766,9 +862,9 @@ public class DateTimeUtils {
      * @param date the date to convert
      * @return the {@link Instant}, or {@code null} if {@code date} is {@code null}
      */
+    @Deprecated
     @ScriptApi
     @Nullable
-    @Deprecated
     public static Instant toInstant(@Nullable final Date date) {
         if (date == null) {
             return null;
@@ -795,6 +891,26 @@ public class DateTimeUtils {
     }
 
     /**
+     * Converts a {@link LocalDateTime} and {@link ZoneId} to a {@link ZonedDateTime}.
+     *
+     * @param localDateTime the local date time
+     * @param timeZone the time zone
+     * @return the {@link ZonedDateTime}, or {@code null} if any input is {@code null}
+     */
+    @ScriptApi
+    @Nullable
+    public static ZonedDateTime toZonedDateTime(
+            @Nullable final LocalDateTime localDateTime,
+            @Nullable final ZoneId timeZone) {
+        if (localDateTime == null || timeZone == null) {
+            return null;
+        }
+
+        return localDateTime // LocalDateTime
+                .atZone(timeZone); // ZonedDateTime
+    }
+
+    /**
      * Converts a {@link LocalDate}, {@link LocalTime}, and {@link ZoneId} to a {@link ZonedDateTime}.
      *
      * @param date the local date
@@ -818,12 +934,62 @@ public class DateTimeUtils {
     }
 
     /**
+     * Converts an {@link Instant} to a {@link LocalDateTime} with the specified {@link ZoneId}.
+     *
+     * @param instant the instant to convert
+     * @param timeZone the time zone
+     * @return the {@link LocalDateTime}, or {@code null} if any input is {@code null}
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDateTime toLocalDateTime(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
+        if (instant == null || timeZone == null) {
+            return null;
+        }
+        return toZonedDateTime(instant, timeZone).toLocalDateTime();
+    }
+
+    /**
+     * Gets the {@link LocalDateTime} portion of a {@link ZonedDateTime}.
+     *
+     * @param dateTime the zoned date time to convert
+     * @return the {@link LocalDateTime}, or {@code null} if {@code dateTime} is {@code null}
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDateTime toLocalDateTime(@Nullable final ZonedDateTime dateTime) {
+        if (dateTime == null) {
+            return null;
+        }
+        return dateTime.toLocalDateTime();
+    }
+
+    /**
+     * Converts a {@link LocalDate} and {@link LocalTime} pair to a {@link LocalDateTime}.
+     *
+     * @param localDate the local date to convert
+     * @param localTime the local time to convert
+     * @return the {@link LocalDateTime}, or {@code null} if {@code localDateTime} is {@code null}
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDateTime toLocalDateTime(
+            @Nullable final LocalDate localDate,
+            @Nullable final LocalTime localTime) {
+        if (localDate == null || localTime == null) {
+            return null;
+        }
+        return LocalDateTime.of(localDate, localTime);
+    }
+
+    /**
      * Converts an {@link Instant} to a {@link LocalDate} with the specified {@link ZoneId}.
      *
      * @param instant the instant to convert
      * @param timeZone the time zone
      * @return the {@link LocalDate}, or {@code null} if any input is {@code null}
      */
+    @ScriptApi
     @Nullable
     public static LocalDate toLocalDate(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
         if (instant == null || timeZone == null) {
@@ -834,11 +1000,12 @@ public class DateTimeUtils {
     }
 
     /**
-     * Get the {@link LocalDate} portion of a {@link ZonedDateTime}.
+     * Gets the {@link LocalDate} portion of a {@link ZonedDateTime}.
      *
      * @param dateTime the zoned date time to convert
      * @return the {@link LocalDate}, or {@code null} if {@code dateTime} is {@code null}
      */
+    @ScriptApi
     @Nullable
     public static LocalDate toLocalDate(@Nullable final ZonedDateTime dateTime) {
         if (dateTime == null) {
@@ -849,12 +1016,29 @@ public class DateTimeUtils {
     }
 
     /**
+     * Gets the {@link LocalDate} portion of a {@link LocalDateTime}.
+     *
+     * @param localDateTime the local date time to convert
+     * @return the {@link LocalDate}, or {@code null} if {@code localDateTime} is {@code null}
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDate toLocalDate(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return null;
+        }
+
+        return localDateTime.toLocalDate();
+    }
+
+    /**
      * Converts an {@link Instant} to a {@link LocalTime} with the specified {@link ZoneId}.
      *
      * @param instant the instant to convert
      * @param timeZone the time zone
      * @return the {@link LocalTime}, or {@code null} if any input is {@code null}
      */
+    @ScriptApi
     @Nullable
     public static LocalTime toLocalTime(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
         if (instant == null || timeZone == null) {
@@ -864,11 +1048,12 @@ public class DateTimeUtils {
     }
 
     /**
-     * Get the {@link LocalTime} portion of a {@link ZonedDateTime}.
+     * Gets the {@link LocalTime} portion of a {@link ZonedDateTime}.
      *
      * @param dateTime the zoned date time to convert
      * @return the {@link LocalTime}, or {@code null} if {@code dateTime} is {@code null}
      */
+    @ScriptApi
     @Nullable
     public static LocalTime toLocalTime(@Nullable final ZonedDateTime dateTime) {
         if (dateTime == null) {
@@ -878,11 +1063,27 @@ public class DateTimeUtils {
     }
 
     /**
+     * Gets the {@link LocalTime} portion of a {@link LocalDateTime}.
+     *
+     * @param localDateTime the local date time to convert
+     * @return the {@link LocalTime}, or {@code null} if {@code localDateTime} is {@code null}
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalTime toLocalTime(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return null;
+        }
+        return localDateTime.toLocalTime();
+    }
+
+    /**
      * Converts the number of milliseconds from midnight to a {@link LocalTime}
      *
      * @param millis milliseconds from midnight
      * @return the {@link LocalTime}, or {@code null} if any input is {@link QueryConstants#NULL_INT NULL_INT}
      */
+    @ScriptApi
     public static @Nullable LocalTime millisOfDayToLocalTime(final int millis) {
         if (millis == NULL_INT) {
             return null;
@@ -896,6 +1097,7 @@ public class DateTimeUtils {
      * @param micros microseconds from midnight
      * @return the {@link LocalTime}, or {@code null} if any input is {@link QueryConstants#NULL_LONG NULL_LONG}
      */
+    @ScriptApi
     public static @Nullable LocalTime microsOfDayToLocalTime(final long micros) {
         if (micros == NULL_LONG) {
             return null;
@@ -909,6 +1111,7 @@ public class DateTimeUtils {
      * @param nanos nanoseconds from midnight
      * @return the {@link LocalTime}, or {@code null} if any input is {@link QueryConstants#NULL_LONG NULL_LONG}
      */
+    @ScriptApi
     public static @Nullable LocalTime nanosOfDayToLocalTime(final long nanos) {
         if (nanos == NULL_LONG) {
             return null;
@@ -924,6 +1127,7 @@ public class DateTimeUtils {
      * @deprecated
      */
     @Deprecated
+    @ScriptApi
     @Nullable
     public static Date toDate(@Nullable final Instant instant) {
         if (instant == null) {
@@ -940,6 +1144,7 @@ public class DateTimeUtils {
      * @deprecated
      */
     @Deprecated
+    @ScriptApi
     @Nullable
     public static Date toDate(@Nullable final ZonedDateTime dateTime) {
         if (dateTime == null) {
@@ -1083,6 +1288,7 @@ public class DateTimeUtils {
      * @param date date to compute the Epoch offset for
      * @return days since Epoch, or a {@link QueryConstants#NULL_LONG NULL_LONG} value if the instant is {@code null}
      */
+    @ScriptApi
     public static long epochDays(@Nullable final LocalDate date) {
         if (date == null) {
             return NULL_LONG;
@@ -1096,6 +1302,7 @@ public class DateTimeUtils {
      * @param date date to compute the Epoch offset for
      * @return days since Epoch, or a {@link QueryConstants#NULL_INT NULL_INT} value if the instant is {@code null}
      */
+    @ScriptApi
     public static int epochDaysAsInt(@Nullable final LocalDate date) {
         if (date == null) {
             return NULL_INT;
@@ -1299,6 +1506,7 @@ public class DateTimeUtils {
      * @return {@code null} if the input is {@link QueryConstants#NULL_LONG}; otherwise the input days from the Epoch
      *         converted to a {@link LocalDate}
      */
+    @ScriptApi
     public static @Nullable LocalDate epochDaysToLocalDate(final long days) {
         return days == NULL_LONG ? null : LocalDate.ofEpochDay(days);
     }
@@ -1310,6 +1518,7 @@ public class DateTimeUtils {
      * @return {@code null} if the input is {@link QueryConstants#NULL_INT}; otherwise the input days from the Epoch
      *         converted to a {@link LocalDate}
      */
+    @ScriptApi
     public static @Nullable LocalDate epochDaysAsIntToLocalDate(final int days) {
         return days == NULL_INT ? null : LocalDate.ofEpochDay(days);
     }
@@ -1405,13 +1614,105 @@ public class DateTimeUtils {
     // region Arithmetic
 
     /**
+     * Adds days to a {@link LocalDate}.
+     *
+     * @param localDateTime starting local date time
+     * @param days number of days to add
+     * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
+     *         local date time plus the specified number of days
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDateTime plusDays(@Nullable final LocalDateTime localDateTime, final long days) {
+        if (localDateTime == null || days == NULL_LONG) {
+            return null;
+        }
+
+        try {
+            return localDateTime.plusDays(days);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Adds days to a {@link LocalDate}.
+     *
+     * @param localDate starting local date
+     * @param days number of days to add
+     * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
+     *         local date plus the specified number of days
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDate plusDays(@Nullable final LocalDate localDate, final long days) {
+        if (localDate == null || days == NULL_LONG) {
+            return null;
+        }
+
+        try {
+            return localDate.plusDays(days);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Adds a time period to a {@link LocalDateTime}.
+     *
+     * @param localDateTime starting local date time
+     * @param period time period
+     * @return {@code null} if either input is {@code null}; otherwise the starting local date time plus the specified
+     *         time period
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDateTime plus(@Nullable final LocalDateTime localDateTime, final Period period) {
+        if (localDateTime == null || period == null) {
+            return null;
+        }
+
+        try {
+            return localDateTime.plus(period);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Adds a time period to a {@link LocalDate}.
+     *
+     * @param localDate starting local date
+     * @param period time period
+     * @return {@code null} if either input is {@code null}; otherwise the starting local date plus the specified time
+     *         period
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDate plus(@Nullable final LocalDate localDate, final Period period) {
+        if (localDate == null || period == null) {
+            return null;
+        }
+
+        try {
+            return localDate.plus(period);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
      * Adds nanoseconds to an {@link Instant}.
      *
      * @param instant starting instant value
      * @param nanos number of nanoseconds to add
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         instant plus the specified number of nanoseconds
-     * @throws DateTimeOverflowException if the resultant instant exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1422,7 +1723,7 @@ public class DateTimeUtils {
 
         try {
             return instant.plusNanos(nanos);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1434,7 +1735,7 @@ public class DateTimeUtils {
      * @param nanos number of nanoseconds to add
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         zoned date time plus the specified number of nanoseconds
-     * @throws DateTimeOverflowException if the resultant zoned date time exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1445,7 +1746,7 @@ public class DateTimeUtils {
 
         try {
             return dateTime.plusNanos(nanos);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1457,7 +1758,7 @@ public class DateTimeUtils {
      * @param duration time period
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         instant plus the specified time period
-     * @throws DateTimeOverflowException if the resultant instant exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1468,7 +1769,7 @@ public class DateTimeUtils {
 
         try {
             return instant.plus(duration);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1480,7 +1781,7 @@ public class DateTimeUtils {
      * @param period time period
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         instant plus the specified time period
-     * @throws DateTimeOverflowException if the resultant instant exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1491,7 +1792,7 @@ public class DateTimeUtils {
 
         try {
             return instant.plus(period);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1503,7 +1804,7 @@ public class DateTimeUtils {
      * @param duration time period
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         zoned date time plus the specified time period
-     * @throws DateTimeOverflowException if the resultant zoned date time exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1514,7 +1815,7 @@ public class DateTimeUtils {
 
         try {
             return dateTime.plus(duration);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1526,7 +1827,7 @@ public class DateTimeUtils {
      * @param period time period
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         zoned date time plus the specified time period
-     * @throws DateTimeOverflowException if the resultant zoned date time exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1537,7 +1838,139 @@ public class DateTimeUtils {
 
         try {
             return dateTime.plus(period);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Adds two durations.
+     *
+     * @param duration1 first duration
+     * @param duration2 second duration
+     * @return {@code null} if either input is {@code null}; otherwise the sum of the two durations
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Duration plus(@Nullable final Duration duration1, @Nullable final Duration duration2) {
+        if (duration1 == null || duration2 == null) {
+            return null;
+        }
+
+        try {
+            return duration1.plus(duration2);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Adds two periods.
+     *
+     * @param period1 first period
+     * @param period2 second period
+     * @return {@code null} if either input is {@code null}; otherwise the sum of the two periods
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Period plus(@Nullable final Period period1, @Nullable final Period period2) {
+        if (period1 == null || period2 == null) {
+            return null;
+        }
+
+        try {
+            return period1.plus(period2);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Subtracts days from a {@link LocalDate}.
+     *
+     * @param localDateTime starting date
+     * @param days number of days to subtract
+     * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
+     *         local date time minus the specified number of days
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDateTime minusDays(@Nullable final LocalDateTime localDateTime, final long days) {
+        if (localDateTime == null || days == NULL_LONG) {
+            return null;
+        }
+
+        try {
+            return localDateTime.minusDays(days);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Subtracts days from a {@link LocalDate}.
+     *
+     * @param localDate starting local date
+     * @param days number of days to subtract
+     * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
+     *         local date minus the specified number of days
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDate minusDays(@Nullable final LocalDate localDate, final long days) {
+        if (localDate == null || days == NULL_LONG) {
+            return null;
+        }
+
+        try {
+            return localDate.minusDays(days);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Subtracts a time period from a {@link LocalDateTime}.
+     *
+     * @param localDateTime starting local date time
+     * @param period time period
+     * @return {@code null} if either input is {@code null}; otherwise the starting local date time minus the specified
+     *         time period
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDateTime minus(@Nullable final LocalDateTime localDateTime, final Period period) {
+        if (localDateTime == null || period == null) {
+            return null;
+        }
+
+        try {
+            return localDateTime.minus(period);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Subtracts a time period from a {@link LocalDate}.
+     *
+     * @param localDate starting local date
+     * @param period time period
+     * @return {@code null} if either input is {@code null}; otherwise the starting local date minus the specified time
+     *         period
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDate minus(@Nullable final LocalDate localDate, final Period period) {
+        if (localDate == null || period == null) {
+            return null;
+        }
+
+        try {
+            return localDate.minus(period);
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1549,7 +1982,7 @@ public class DateTimeUtils {
      * @param nanos number of nanoseconds to subtract
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         instant minus the specified number of nanoseconds
-     * @throws DateTimeOverflowException if the resultant instant exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1560,7 +1993,7 @@ public class DateTimeUtils {
 
         try {
             return instant.minusNanos(nanos);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1572,7 +2005,7 @@ public class DateTimeUtils {
      * @param nanos number of nanoseconds to subtract
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         zoned date time minus the specified number of nanoseconds
-     * @throws DateTimeOverflowException if the resultant zoned date time exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1583,7 +2016,7 @@ public class DateTimeUtils {
 
         try {
             return dateTime.minusNanos(nanos);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1595,7 +2028,7 @@ public class DateTimeUtils {
      * @param duration time period
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         instant minus the specified time period
-     * @throws DateTimeOverflowException if the resultant instant exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1606,7 +2039,7 @@ public class DateTimeUtils {
 
         try {
             return instant.minus(duration);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1618,7 +2051,7 @@ public class DateTimeUtils {
      * @param period time period
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         instant minus the specified time period
-     * @throws DateTimeOverflowException if the resultant instant exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1629,7 +2062,7 @@ public class DateTimeUtils {
 
         try {
             return instant.minus(period);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1641,7 +2074,7 @@ public class DateTimeUtils {
      * @param duration time period
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         zoned date time minus the specified time period
-     * @throws DateTimeOverflowException if the resultant zoned date time exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1652,7 +2085,7 @@ public class DateTimeUtils {
 
         try {
             return dateTime.minus(duration);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1664,7 +2097,7 @@ public class DateTimeUtils {
      * @param period time period
      * @return {@code null} if either input is {@code null} or {@link QueryConstants#NULL_LONG}; otherwise the starting
      *         zoned date time minus the specified time period
-     * @throws DateTimeOverflowException if the resultant zoned date time exceeds the supported range
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
      */
     @ScriptApi
     @Nullable
@@ -1675,7 +2108,7 @@ public class DateTimeUtils {
 
         try {
             return dateTime.minus(period);
-        } catch (Exception ex) {
+        } catch (DateTimeException | ArithmeticException ex) {
             throw new DateTimeOverflowException(ex);
         }
     }
@@ -1714,6 +2147,130 @@ public class DateTimeUtils {
         }
 
         return checkUnderflowMinus(epochNanos(dateTime1), epochNanos(dateTime2), true);
+    }
+
+    /**
+     * Subtracts two durations.
+     *
+     * @param duration1 first duration
+     * @param duration2 second duration
+     * @return {@code null} if either input is {@code null}; otherwise the difference of the two durations
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Duration minus(@Nullable final Duration duration1, @Nullable final Duration duration2) {
+        if (duration1 == null || duration2 == null) {
+            return null;
+        }
+
+        try {
+            return duration1.minus(duration2);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Subtracts two periods.
+     *
+     * @param period1 first period
+     * @param period2 second period
+     * @return {@code null} if either input is {@code null}; otherwise the difference of the two periods
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Period minus(@Nullable final Period period1, @Nullable final Period period2) {
+        if (period1 == null || period2 == null) {
+            return null;
+        }
+
+        try {
+            return period1.minus(period2);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Multiply a duration by a scalar.
+     *
+     * @param duration the duration to multiply
+     * @param scalar the scalar to multiply by
+     * @return {@code null} if either input is {@code null}; otherwise the duration multiplied by the scalar
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Duration multiply(final Duration duration, final long scalar) {
+        if (duration == null || scalar == NULL_LONG) {
+            return null;
+        }
+
+        try {
+            return duration.multipliedBy(scalar);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Multiply a duration by a scalar.
+     *
+     * @param duration the duration to multiply
+     * @param scalar the scalar to multiply by
+     * @return {@code null} if either input is {@code null}; otherwise the duration multiplied by the scalar
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Duration multiply(final long scalar, final Duration duration) {
+        return multiply(duration, scalar);
+    }
+
+    /**
+     * Multiply a period by a scalar.
+     *
+     * @param period the period to multiply
+     * @param scalar the scalar to multiply by
+     * @return {@code null} if either input is {@code null}; otherwise the period multiplied by the scalar
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Period multiply(final Period period, final int scalar) {
+        if (period == null || scalar == NULL_INT) {
+            return null;
+        }
+
+        try {
+            return period.multipliedBy(scalar);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
+    }
+
+    /**
+     * Multiply a period by a scalar.
+     *
+     * @param period the period to multiply
+     * @param scalar the scalar to multiply by
+     * @return {@code null} if either input is {@code null}; otherwise the period multiplied by the scalar
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Period multiply(final int scalar, final Period period) {
+        return multiply(period, scalar);
+    }
+
+    /**
+     * Divide a duration by a scalar.
+     *
+     * @param duration the duration to divide
+     * @param scalar the scalar to divide by
+     * @return {@code null} if either input is {@code null}; otherwise the duration divide by the scalar
+     * @throws DateTimeOverflowException if the datetime arithmetic overflows or underflows
+     */
+    public static Duration divide(final Duration duration, final long scalar) {
+        if (duration == null || scalar == NULL_LONG) {
+            return null;
+        }
+
+        try {
+            return duration.dividedBy(scalar);
+        } catch (DateTimeException | ArithmeticException ex) {
+            throw new DateTimeOverflowException(ex);
+        }
     }
 
     /**
@@ -2382,53 +2939,79 @@ public class DateTimeUtils {
     }
 
     /**
-     * Returns the number of nanoseconds that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of nanoseconds that have elapsed since the start of the day.
      *
      * @param instant time
      * @param timeZone time zone
+     * @param asLocalTime If {@code true}, returns the number of nanos from the start of the day according to the local
+     *        time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of nanos
+     *        from the start of the day. On days when daylight savings time events occur, results may be different from
+     *        what is expected based upon the local time. For example, on daylight savings time change days, 9:30AM may
+     *        be earlier or later in the day based upon if the daylight savings time adjustment is forwards or
+     *        backwards. On non DST days, the result is the same regardless of the value of {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_LONG} if either input is {@code null}; otherwise, number of nanoseconds that
-     *         have elapsed since the top of the day
+     *         have elapsed since the start of the day
      */
     @ScriptApi
-    public static long nanosOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
+    public static long nanosOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone,
+            final boolean asLocalTime) {
         if (instant == null || timeZone == null) {
             return NULL_LONG;
         }
 
-        return nanosOfDay(toZonedDateTime(instant, timeZone));
+        return nanosOfDay(toZonedDateTime(instant, timeZone), asLocalTime);
     }
 
     /**
-     * Returns the number of nanoseconds that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of nanoseconds that have elapsed since the start of the day.
      *
      * @param dateTime time
+     * @param asLocalTime If {@code true}, returns the number of nanos from the start of the day according to the local
+     *        time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of nanos
+     *        from the start of the day. On days when daylight savings time events occur, results may be different from
+     *        what is expected based upon the local time. For example, on daylight savings time change days, 9:30AM may
+     *        be earlier or later in the day based upon if the daylight savings time adjustment is forwards or
+     *        backwards. On non DST days, the result is the same regardless of the value of {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_LONG} if either input is {@code null}; otherwise, number of nanoseconds that
-     *         have elapsed since the top of the day
+     *         have elapsed since the start of the day
      */
     @ScriptApi
-    public static long nanosOfDay(@Nullable final ZonedDateTime dateTime) {
+    public static long nanosOfDay(@Nullable final ZonedDateTime dateTime, final boolean asLocalTime) {
         if (dateTime == null) {
             return NULL_LONG;
         }
 
-        return epochNanos(dateTime) - epochNanos(atMidnight(dateTime));
+        if (asLocalTime) {
+            return dateTime.toLocalTime().toNanoOfDay();
+        } else {
+            return epochNanos(dateTime) - epochNanos(atMidnight(dateTime));
+        }
     }
 
     /**
-     * Returns the number of nanoseconds that have elapsed since the top of the day.
+     * Returns the number of nanoseconds that have elapsed since the start of the day.
      *
-     * @param localTime time
+     * @param localDateTime local date time
      * @return {@link QueryConstants#NULL_LONG} if input is {@code null}; otherwise, number of nanoseconds that have
-     *         elapsed since the top of the day
+     *         elapsed since the start of the day
      */
+    @ScriptApi
+    public static long nanosOfDay(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return NULL_LONG;
+        }
+
+        return localDateTime.toLocalTime().toNanoOfDay();
+    }
+
+    /**
+     * Returns the number of nanoseconds that have elapsed since the start of the day.
+     *
+     * @param localTime local time
+     * @return {@link QueryConstants#NULL_LONG} if input is {@code null}; otherwise, number of nanoseconds that have
+     *         elapsed since the start of the day
+     */
+    @ScriptApi
     public static long nanosOfDay(@Nullable final LocalTime localTime) {
         if (localTime == null) {
             return NULL_LONG;
@@ -2438,200 +3021,478 @@ public class DateTimeUtils {
     }
 
     /**
-     * Returns the number of milliseconds that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of milliseconds that have elapsed since the start of the day.
      *
      * @param instant time
      * @param timeZone time zone
+     * @param asLocalTime If {@code true}, returns the number of milliseconds from the start of the day according to the
+     *        local time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of
+     *        milliseconds from the start of the day. On days when daylight savings time events occur, results may be
+     *        different from what is expected based upon the local time. For example, on daylight savings time change
+     *        days, 9:30AM may be earlier or later in the day based upon if the daylight savings time adjustment is
+     *        forwards or backwards. On non DST days, the result is the same regardless of the value of
+     *        {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, number of milliseconds that
-     *         have elapsed since the top of the day
+     *         have elapsed since the start of the day
      */
     @ScriptApi
-    public static int millisOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
+    public static int millisOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone,
+            final boolean asLocalTime) {
         if (instant == null || timeZone == null) {
             return NULL_INT;
         }
 
-        return (int) nanosToMillis(nanosOfDay(instant, timeZone));
+        return (int) nanosToMillis(nanosOfDay(instant, timeZone, asLocalTime));
     }
 
     /**
-     * Returns the number of milliseconds that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of milliseconds that have elapsed since the start of the day.
      *
      * @param dateTime time
+     * @param asLocalTime If {@code true}, returns the number of milliseconds from the start of the day according to the
+     *        local time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of
+     *        milliseconds from the start of the day. On days when daylight savings time events occur, results may be
+     *        different from what is expected based upon the local time. For example, on daylight savings time change
+     *        days, 9:30AM may be earlier or later in the day based upon if the daylight savings time adjustment is
+     *        forwards or backwards. On non DST days, the result is the same regardless of the value of
+     *        {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, number of milliseconds that
-     *         have elapsed since the top of the day
+     *         have elapsed since the start of the day
      */
     @ScriptApi
-    public static int millisOfDay(@Nullable final ZonedDateTime dateTime) {
+    public static int millisOfDay(@Nullable final ZonedDateTime dateTime, final boolean asLocalTime) {
         if (dateTime == null) {
             return NULL_INT;
         }
 
-        return (int) nanosToMillis(nanosOfDay(dateTime));
+        return (int) nanosToMillis(nanosOfDay(dateTime, asLocalTime));
     }
 
     /**
-     * Returns the number of seconds that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of milliseconds that have elapsed since the start of the day.
+     *
+     * @param localDateTime local date time
+     * @return {@link QueryConstants#NULL_INT} if input is {@code null}; otherwise, number of milliseconds that have
+     *         elapsed since the start of the day
+     */
+    @ScriptApi
+    public static int millisOfDay(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return NULL_INT;
+        }
+
+        return (int) nanosToMillis(localDateTime.toLocalTime().toNanoOfDay());
+    }
+
+    /**
+     * Returns the number of milliseconds that have elapsed since the start of the day.
+     *
+     * @param localTime local time
+     * @return {@link QueryConstants#NULL_INT} if input is {@code null}; otherwise, number of milliseconds that have
+     *         elapsed since the start of the day
+     */
+    @ScriptApi
+    public static int millisOfDay(@Nullable final LocalTime localTime) {
+        if (localTime == null) {
+            return NULL_INT;
+        }
+
+        return (int) nanosToMillis(localTime.toNanoOfDay());
+    }
+
+    /**
+     * Returns the number of seconds that have elapsed since the start of the day.
      *
      * @param instant time
      * @param timeZone time zone
+     * @param asLocalTime If {@code true}, returns the number of nanos from the start of the day according to the local
+     *        time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of nanos
+     *        from the start of the day. On days when daylight savings time events occur, results may be different from
+     *        what is expected based upon the local time. For example, on daylight savings time change days, 9:30AM may
+     *        be earlier or later in the day based upon if the daylight savings time adjustment is forwards or
+     *        backwards. On non DST days, the result is the same regardless of the value of {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, number of seconds that have
-     *         elapsed since the top of the day
+     *         elapsed since the start of the day
      */
     @ScriptApi
-    public static int secondOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
+    public static int secondOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone,
+            final boolean asLocalTime) {
         if (instant == null || timeZone == null) {
             return NULL_INT;
         }
 
-        return (int) nanosToSeconds(nanosOfDay(instant, timeZone));
+        return (int) nanosToSeconds(nanosOfDay(instant, timeZone, asLocalTime));
     }
 
     /**
-     * Returns the number of seconds that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of seconds that have elapsed since the start of the day.
      *
      * @param dateTime time
+     * @param asLocalTime If {@code true}, returns the number of seconds from the start of the day according to the
+     *        local time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of
+     *        seconds from the start of the day. On days when daylight savings time events occur, results may be
+     *        different from what is expected based upon the local time. For example, on daylight savings time change
+     *        days, 9:30AM may be earlier or later in the day based upon if the daylight savings time adjustment is
+     *        forwards or backwards. On non DST days, the result is the same regardless of the value of
+     *        {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, number of seconds that have
-     *         elapsed since the top of the day
+     *         elapsed since the start of the day
      */
     @ScriptApi
-    public static int secondOfDay(@Nullable final ZonedDateTime dateTime) {
+    public static int secondOfDay(@Nullable final ZonedDateTime dateTime, final boolean asLocalTime) {
         if (dateTime == null) {
             return NULL_INT;
         }
 
-        return (int) nanosToSeconds(nanosOfDay(dateTime));
+        return (int) nanosToSeconds(nanosOfDay(dateTime, asLocalTime));
     }
 
     /**
-     * Returns the number of minutes that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of seconds that have elapsed since the start of the day.
+     *
+     * @param localDateTime local date time
+     * @return {@link QueryConstants#NULL_INT} if input is {@code null}; otherwise, number of seconds that have elapsed
+     *         since the start of the day
+     */
+    @ScriptApi
+    public static int secondOfDay(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return NULL_INT;
+        }
+
+        return localDateTime.toLocalTime().toSecondOfDay();
+    }
+
+    /**
+     * Returns the number of seconds that have elapsed since the start of the day.
+     *
+     * @param localTime local time
+     * @return {@link QueryConstants#NULL_INT} if input is {@code null}; otherwise, number of seconds that have elapsed
+     *         since the start of the day
+     */
+    @ScriptApi
+    public static int secondOfDay(@Nullable final LocalTime localTime) {
+        if (localTime == null) {
+            return NULL_INT;
+        }
+
+        return localTime.toSecondOfDay();
+    }
+
+    /**
+     * Returns the number of minutes that have elapsed since the start of the day.
      *
      * @param instant time
      * @param timeZone time zone
+     * @param asLocalTime If {@code true}, returns the number of minutes from the start of the day according to the
+     *        local time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of
+     *        minutes from the start of the day. On days when daylight savings time events occur, results may be
+     *        different from what is expected based upon the local time. For example, on daylight savings time change
+     *        days, 9:30AM may be earlier or later in the day based upon if the daylight savings time adjustment is
+     *        forwards or backwards. On non DST days, the result is the same as if asLocalTime is false.
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, number of minutes that have
-     *         elapsed since the top of the day
+     *         elapsed since the start of the day
      */
     @ScriptApi
-    public static int minuteOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
+    public static int minuteOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone,
+            final boolean asLocalTime) {
         if (instant == null || timeZone == null) {
             return NULL_INT;
         }
 
-        return secondOfDay(instant, timeZone) / 60;
+        return secondOfDay(instant, timeZone, asLocalTime) / 60;
     }
 
     /**
-     * Returns the number of minutes that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of minutes that have elapsed since the start of the day.
      *
      * @param dateTime time
+     * @param asLocalTime If {@code true}, returns the number of minutes from the start of the day according to the
+     *        local time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of
+     *        minutes from the start of the day. On days when daylight savings time events occur, results may be
+     *        different from what is expected based upon the local time. For example, on daylight savings time change
+     *        days, 9:30AM may be earlier or later in the day based upon if the daylight savings time adjustment is
+     *        forwards or backwards. On non DST days, the result is the same regardless of the value of
+     *        {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, number of minutes that have
-     *         elapsed since the top of the day
+     *         elapsed since the start of the day
      */
     @ScriptApi
-    public static int minuteOfDay(@Nullable final ZonedDateTime dateTime) {
+    public static int minuteOfDay(@Nullable final ZonedDateTime dateTime, final boolean asLocalTime) {
         if (dateTime == null) {
             return NULL_INT;
         }
 
-        return secondOfDay(dateTime) / 60;
+        return secondOfDay(dateTime, asLocalTime) / 60;
     }
 
     /**
-     * Returns the number of hours that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of minutes that have elapsed since the start of the day.
+     *
+     * @param localDateTime local date time
+     * @return {@link QueryConstants#NULL_INT} if input is {@code null}; otherwise, number of minutes that have elapsed
+     *         since the start of the day
+     */
+    @ScriptApi
+    public static int minuteOfDay(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return NULL_INT;
+        }
+
+        return secondOfDay(localDateTime) / 60;
+    }
+
+    /**
+     * Returns the number of minutes that have elapsed since the start of the day.
+     *
+     * @param localTime local time
+     * @return {@link QueryConstants#NULL_INT} if input is {@code null}; otherwise, number of minutes that have elapsed
+     *         since the start of the day
+     */
+    @ScriptApi
+    public static int minuteOfDay(@Nullable final LocalTime localTime) {
+        if (localTime == null) {
+            return NULL_INT;
+        }
+
+        return secondOfDay(localTime) / 60;
+    }
+
+    /**
+     * Returns the number of hours that have elapsed since the start of the day.
      *
      * @param instant time
      * @param timeZone time zone
+     * @param asLocalTime If {@code true}, returns the number of hours from the start of the day according to the local
+     *        time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of hours
+     *        from the start of the day. On days when daylight savings time events occur, results may be different from
+     *        what is expected based upon the local time. For example, on daylight savings time change days, 9:30AM may
+     *        be earlier or later in the day based upon if the daylight savings time adjustment is forwards or
+     *        backwards. On non DST days, the result is the same regardless of the value of {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, number of hours that have
-     *         elapsed since the top of the day
+     *         elapsed since the start of the day
      */
     @ScriptApi
-    public static int hourOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
+    public static int hourOfDay(@Nullable final Instant instant, @Nullable final ZoneId timeZone,
+            final boolean asLocalTime) {
         if (instant == null || timeZone == null) {
             return NULL_INT;
         }
 
-        return hourOfDay(toZonedDateTime(instant, timeZone));
+        return hourOfDay(toZonedDateTime(instant, timeZone), asLocalTime);
     }
 
     /**
-     * Returns the number of hours that have elapsed since the top of the day.
-     * <p>
-     * On days when daylight savings time events occur, results may be different from what is expected based upon the
-     * local time. For example, on daylight savings time change days, 9:30AM may be earlier or later in the day based
-     * upon if the daylight savings time adjustment is forwards or backwards.
+     * Returns the number of hours that have elapsed since the start of the day.
      *
      * @param dateTime time
+     * @param asLocalTime If {@code true}, returns the number of hours from the start of the day according to the local
+     *        time. In this case, 9:30AM always returns the same value. If {@code false}, returns the number of hours
+     *        from the start of the day. On days when daylight savings time events occur, results may be different from
+     *        what is expected based upon the local time. For example, on daylight savings time change days, 9:30AM may
+     *        be earlier or later in the day based upon if the daylight savings time adjustment is forwards or
+     *        backwards. On non DST days, the result is the same regardless of the value of {@code asLocalTime}.
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, number of hours that have
-     *         elapsed since the top of the day
+     *         elapsed since the start of the day
      */
     @ScriptApi
-    public static int hourOfDay(@Nullable final ZonedDateTime dateTime) {
+    public static int hourOfDay(@Nullable final ZonedDateTime dateTime, final boolean asLocalTime) {
         if (dateTime == null) {
             return NULL_INT;
         }
 
-        return minuteOfDay(dateTime) / 60;
+        return minuteOfDay(dateTime, asLocalTime) / 60;
     }
 
     /**
-     * Returns a 1-based int value of the day of the week for an {@link Instant} in the specified time zone, with 1
-     * being Monday and 7 being Sunday.
+     * Returns the number of hours that have elapsed since the start of the day.
      *
-     * @param instant time to find the day of the month of
-     * @param timeZone time zone
-     * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the day of the week
+     * @param localDateTime local date time
+     * @return {@link QueryConstants#NULL_INT} if input is {@code null}; otherwise, number of hours that have elapsed
+     *         since the start of the day
      */
     @ScriptApi
-    public static int dayOfWeek(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
-        if (instant == null || timeZone == null) {
+    public static int hourOfDay(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
             return NULL_INT;
+        }
+
+        return localDateTime.getHour();
+    }
+
+    /**
+     * Returns the number of hours that have elapsed since the start of the day.
+     *
+     * @param localTime local time
+     * @return {@link QueryConstants#NULL_INT} if input is {@code null}; otherwise, number of hours that have elapsed
+     *         since the start of the day
+     */
+    @ScriptApi
+    public static int hourOfDay(@Nullable final LocalTime localTime) {
+        if (localTime == null) {
+            return NULL_INT;
+        }
+
+        return localTime.getHour();
+    }
+
+    /**
+     * Returns athe day of the week for a {@link ZonedDateTime}.
+     *
+     * @param localDateTime local date time to find the day of the week of
+     * @return {@code null} if {@code localDateTime} is {@code null}; otherwise, the day of the week
+     */
+    @ScriptApi
+    public static DayOfWeek dayOfWeek(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return null;
+        }
+
+        return localDateTime.getDayOfWeek();
+    }
+
+    /**
+     * Returns the day of the week for a {@link LocalDate}.
+     *
+     * @param localDate local date to find the day of the week of
+     * @return {@code null} if {@code localDate} is {@code null}; otherwise, the day of the week
+     */
+    @ScriptApi
+    public static DayOfWeek dayOfWeek(@Nullable final LocalDate localDate) {
+        if (localDate == null) {
+            return null;
+        }
+
+        return localDate.getDayOfWeek();
+    }
+
+    /**
+     * Returns the day of the week for an {@link Instant} in the specified time zone.
+     *
+     * @param instant time to find the day of the week of
+     * @param timeZone time zone
+     * @return {@code null} if either input is {@code null}; otherwise, the day of the week
+     */
+    @ScriptApi
+    public static DayOfWeek dayOfWeek(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
+        if (instant == null || timeZone == null) {
+            return null;
         }
 
         return dayOfWeek(toZonedDateTime(instant, timeZone));
     }
 
     /**
-     * Returns a 1-based int value of the day of the week for a {@link ZonedDateTime} in the specified time zone, with 1
+     * Returns the day of the week for a {@link ZonedDateTime} in the specified time zone.
+     *
+     * @param dateTime time to find the day of the week of
+     * @return {@code null} if either input is {@code null}; otherwise, the day of the week
+     */
+    @ScriptApi
+    public static DayOfWeek dayOfWeek(@Nullable final ZonedDateTime dateTime) {
+        if (dateTime == null) {
+            return null;
+        }
+
+        return dateTime.getDayOfWeek();
+    }
+
+    /**
+     * Returns a 1-based int value of the day of the week for a {@link LocalDateTime}, with 1 being Monday and 7 being
+     * Sunday.
+     *
+     * @param localDateTime local date time to find the day of the week of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDateTime} is {@code null}; otherwise, the day of the week
+     */
+    @ScriptApi
+    public static int dayOfWeekValue(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDateTime.getDayOfWeek().getValue();
+    }
+
+    /**
+     * Returns a 1-based int value of the day of the week for a {@link LocalDate}, with 1 being Monday and 7 being
+     * Sunday.
+     *
+     * @param localDate local date to find the day of the week of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDate} is {@code null}; otherwise, the day of the week
+     */
+    @ScriptApi
+    public static int dayOfWeekValue(@Nullable final LocalDate localDate) {
+        if (localDate == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDate.getDayOfWeek().getValue();
+    }
+
+    /**
+     * Returns a 1-based int value of the day of the week for an {@link Instant} in the specified time zone, with 1
      * being Monday and 7 being Sunday.
      *
-     * @param dateTime time to find the day of the month of
+     * @param instant time to find the day of the week of
+     * @param timeZone time zone
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the day of the week
      */
     @ScriptApi
-    public static int dayOfWeek(@Nullable final ZonedDateTime dateTime) {
+    public static int dayOfWeekValue(@Nullable final Instant instant, @Nullable final ZoneId timeZone) {
+        if (instant == null || timeZone == null) {
+            return NULL_INT;
+        }
+
+        return dayOfWeekValue(toZonedDateTime(instant, timeZone));
+    }
+
+    /**
+     * Returns a 1-based int value of the day of the week for a {@link ZonedDateTime} in the specified time zone, with 1
+     * being Monday and 7 being Sunday.
+     *
+     * @param dateTime time to find the day of the week of
+     * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the day of the week
+     */
+    @ScriptApi
+    public static int dayOfWeekValue(@Nullable final ZonedDateTime dateTime) {
         if (dateTime == null) {
             return NULL_INT;
         }
 
         return dateTime.getDayOfWeek().getValue();
+    }
+
+    /**
+     * Returns a 1-based int value of the day of the month for a {@link LocalDateTime}. The first day of the month
+     * returns 1, the second day returns 2, etc.
+     *
+     * @param localDateTime local date time to find the day of the month of
+     * @return A {@link QueryConstants#NULL_INT} if {@code localDateTime} is {@code null}; otherwise, the day of the
+     *         month
+     */
+    @ScriptApi
+    public static int dayOfMonth(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDateTime.getDayOfMonth();
+    }
+
+    /**
+     * Returns a 1-based int value of the day of the month for a {@link LocalDate}. The first day of the month returns
+     * 1, the second day returns 2, etc.
+     *
+     * @param localDate local date to find the day of the month of
+     * @return A {@link QueryConstants#NULL_INT} if {@code localDate} is {@code null}; otherwise, the day of the month
+     */
+    @ScriptApi
+    public static int dayOfMonth(@Nullable final LocalDate localDate) {
+        if (localDate == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDate.getDayOfMonth();
     }
 
     /**
@@ -2668,10 +3529,42 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns a 1-based int value of the day of the year (Julian date) for a {@link LocalDateTime}. The first day of
+     * the year returns 1, the second day returns 2, etc.
+     *
+     * @param localDateTime local date time to find the day of the year of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDateTime} is {@code null}; otherwise, the day of the year
+     */
+    @ScriptApi
+    public static int dayOfYear(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDateTime.getDayOfYear();
+    }
+
+    /**
+     * Returns a 1-based int value of the day of the year (Julian date) for a {@link LocalDate}. The first day of the
+     * year returns 1, the second day returns 2, etc.
+     *
+     * @param localDate local date to find the day of the year of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDate} is {@code null}; otherwise, the day of the year
+     */
+    @ScriptApi
+    public static int dayOfYear(@Nullable final LocalDate localDate) {
+        if (localDate == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDate.getDayOfYear();
+    }
+
+    /**
      * Returns a 1-based int value of the day of the year (Julian date) for an {@link Instant} in the specified time
      * zone. The first day of the year returns 1, the second day returns 2, etc.
      *
-     * @param instant time to find the day of the month of
+     * @param instant time to find the day of the year of
      * @param timeZone time zone
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the day of the year
      */
@@ -2688,7 +3581,7 @@ public class DateTimeUtils {
      * Returns a 1-based int value of the day of the year (Julian date) for a {@link ZonedDateTime} in the specified
      * time zone. The first day of the year returns 1, the second day returns 2, etc.
      *
-     * @param dateTime time to find the day of the month of
+     * @param dateTime time to find the day of the year of
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the day of the year
      */
     @ScriptApi
@@ -2701,10 +3594,43 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns a 1-based int value of the month of the year (Julian date) for a {@link LocalDateTime}. January is 1,
+     * February is 2, etc.
+     *
+     * @param localDateTime local date time to find the month of the year of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDateTime} is {@code null}; otherwise, the month of the
+     *         year
+     */
+    @ScriptApi
+    public static int monthOfYear(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDateTime.getMonthValue();
+    }
+
+    /**
+     * Returns a 1-based int value of the month of the year (Julian date) for a {@link LocalDate}. January is 1,
+     * February is 2, etc.
+     *
+     * @param localDate local date to find the month of the year of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDate} is {@code null}; otherwise, the month of the year
+     */
+    @ScriptApi
+    public static int monthOfYear(@Nullable final LocalDate localDate) {
+        if (localDate == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDate.getMonthValue();
+    }
+
+    /**
      * Returns a 1-based int value of the month of the year (Julian date) for an {@link Instant} in the specified time
      * zone. January is 1, February is 2, etc.
      *
-     * @param instant time to find the day of the month of
+     * @param instant time to find the month of the year of
      * @param timeZone time zone
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the month of the year
      */
@@ -2721,7 +3647,7 @@ public class DateTimeUtils {
      * Returns a 1-based int value of the month of the year (Julian date) for a {@link ZonedDateTime} in the specified
      * time zone. January is 1, February is 2, etc.
      *
-     * @param dateTime time to find the day of the month of
+     * @param dateTime time to find the month of the year of
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the month of the year
      */
     @ScriptApi
@@ -2734,9 +3660,39 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns the year for a {@link LocalDateTime}.
+     *
+     * @param localDateTime local date to find the year of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDateTime} is {@code null}; otherwise, the year
+     */
+    @ScriptApi
+    public static int year(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDateTime.getYear();
+    }
+
+    /**
+     * Returns the year for a {@link LocalDate}.
+     *
+     * @param localDate local date to find the year of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDate} is {@code null}; otherwise, the year
+     */
+    @ScriptApi
+    public static int year(@Nullable final LocalDate localDate) {
+        if (localDate == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return localDate.getYear();
+    }
+
+    /**
      * Returns the year for an {@link Instant} in the specified time zone.
      *
-     * @param instant time to find the day of the month of
+     * @param instant time to find the year of
      * @param timeZone time zone
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the year
      */
@@ -2752,7 +3708,7 @@ public class DateTimeUtils {
     /**
      * Returns the year for a {@link ZonedDateTime} in the specified time zone.
      *
-     * @param dateTime time to find the day of the month of
+     * @param dateTime time to find the year of
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the year
      */
     @ScriptApi
@@ -2765,9 +3721,41 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns the year of the century (two-digit year) for a {@link LocalDateTime}.
+     *
+     * @param localDateTime local date time to find the year of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDateTime} is {@code null}; otherwise, the year of the
+     *         century (two-digit year)
+     */
+    @ScriptApi
+    public static int yearOfCentury(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return year(localDateTime) % 100;
+    }
+
+    /**
+     * Returns the year of the century (two-digit year) for a {@link LocalDate}.
+     *
+     * @param localDate local date to find the year of
+     * @return {@link QueryConstants#NULL_INT} if {@code localDate} is {@code null}; otherwise, the year of the century
+     *         (two-digit year)
+     */
+    @ScriptApi
+    public static int yearOfCentury(@Nullable final LocalDate localDate) {
+        if (localDate == null) {
+            return io.deephaven.util.QueryConstants.NULL_INT;
+        }
+
+        return year(localDate) % 100;
+    }
+
+    /**
      * Returns the year of the century (two-digit year) for an {@link Instant} in the specified time zone.
      *
-     * @param instant time to find the day of the month of
+     * @param instant time to find the year of
      * @param timeZone time zone
      * @return {@link QueryConstants#NULL_INT} if either input is {@code null}; otherwise, the year of the century
      *         (two-digit year)
@@ -2795,6 +3783,42 @@ public class DateTimeUtils {
         }
 
         return year(dateTime) % 100;
+    }
+
+    /**
+     * Returns a {@link ZonedDateTime} for the prior midnight in the specified time zone.
+     *
+     * @param localDateTime local date time to compute the prior midnight for
+     * @param timeZone time zone
+     * @return {@code null} if either input is {@code null}; otherwise a {@link ZonedDateTime} representing the prior
+     *         midnight in the specified time zone
+     */
+    @ScriptApi
+    @Nullable
+    public static ZonedDateTime atMidnight(@Nullable final LocalDateTime localDateTime, @Nullable ZoneId timeZone) {
+        if (localDateTime == null || timeZone == null) {
+            return null;
+        }
+
+        return localDateTime.toLocalDate().atStartOfDay(timeZone);
+    }
+
+    /**
+     * Returns a {@link ZonedDateTime} for the prior midnight in the specified time zone.
+     *
+     * @param localDate local date to compute the prior midnight for
+     * @param timeZone time zone
+     * @return {@code null} if either input is {@code null}; otherwise a {@link ZonedDateTime} representing the prior
+     *         midnight in the specified time zone
+     */
+    @ScriptApi
+    @Nullable
+    public static ZonedDateTime atMidnight(@Nullable final LocalDate localDate, @Nullable ZoneId timeZone) {
+        if (localDate == null || timeZone == null) {
+            return null;
+        }
+
+        return localDate.atStartOfDay(timeZone);
     }
 
     /**
@@ -2838,8 +3862,8 @@ public class DateTimeUtils {
 
     /**
      * Returns an {@link Instant} value, which is at the starting (lower) end of a time range defined by the interval
-     * nanoseconds. For example, a 5*MINUTE intervalNanos value would return the instant value for the start of the
-     * five-minute window that contains the input instant.
+     * nanoseconds. For example, a five-minute {@code intervalNanos} value would return the instant value for the start
+     * of the five-minute window that contains the input instant.
      *
      * @param instant instant for which to evaluate the start of the containing window
      * @param intervalNanos size of the window in nanoseconds
@@ -2857,9 +3881,29 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns an {@link Instant} value, which is at the starting (lower) end of a time range defined by the interval
+     * nanoseconds. For example, a five-minute {@code interval} value would return the instant value for the start of
+     * the five-minute window that contains the input instant.
+     *
+     * @param instant instant for which to evaluate the start of the containing window
+     * @param interval size of the window
+     * @return {@code null} if either input is {@code null}; otherwise, an {@link Instant} representing the start of the
+     *         window
+     */
+    @ScriptApi
+    @Nullable
+    public static Instant lowerBin(@Nullable final Instant instant, Duration interval) {
+        if (instant == null || interval == null) {
+            return null;
+        }
+
+        return lowerBin(instant, interval.toNanos());
+    }
+
+    /**
      * Returns a {@link ZonedDateTime} value, which is at the starting (lower) end of a time range defined by the
-     * interval nanoseconds. For example, a 5*MINUTE intervalNanos value would return the zoned date time value for the
-     * start of the five-minute window that contains the input zoned date time.
+     * interval nanoseconds. For example, a five-minute {@code intervalNanos} value would return the zoned date time
+     * value for the start of the five-minute window that contains the input zoned date time.
      *
      * @param dateTime zoned date time for which to evaluate the start of the containing window
      * @param intervalNanos size of the window in nanoseconds
@@ -2877,15 +3921,35 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns a {@link ZonedDateTime} value, which is at the starting (lower) end of a time range defined by the
+     * interval nanoseconds. For example, a five-minute {@code interval} value would return the zoned date time value
+     * for the start of the five-minute window that contains the input zoned date time.
+     *
+     * @param dateTime zoned date time for which to evaluate the start of the containing window
+     * @param interval size of the window
+     * @return {@code null} if either input is {@code null}; otherwise, a {@link ZonedDateTime} representing the start
+     *         of the window
+     */
+    @ScriptApi
+    @Nullable
+    public static ZonedDateTime lowerBin(@Nullable final ZonedDateTime dateTime, Duration interval) {
+        if (dateTime == null || interval == null) {
+            return null;
+        }
+
+        return lowerBin(dateTime, interval.toNanos());
+    }
+
+    /**
      * Returns an {@link Instant} value, which is at the starting (lower) end of a time range defined by the interval
-     * nanoseconds. For example, a 5*MINUTE intervalNanos value would return the instant value for the start of the
-     * five-minute window that contains the input instant.
+     * nanoseconds. For example, a five-minute {@code intervalNanos} value would return the instant value for the start
+     * of the five-minute window that contains the input instant.
      *
      * @param instant instant for which to evaluate the start of the containing window
      * @param intervalNanos size of the window in nanoseconds
      * @param offset The window start offset in nanoseconds. For example, a value of MINUTE would offset all windows by
      *        one minute.
-     * @return {@code null} if either input is {@code null}; otherwise, an {@link Instant} representing the start of the
+     * @return {@code null} if any input is {@code null}; otherwise, an {@link Instant} representing the start of the
      *         window
      */
     @ScriptApi
@@ -2899,15 +3963,37 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns an {@link Instant} value, which is at the starting (lower) end of a time range defined by the interval
+     * nanoseconds. For example, a five-minute {@code interval} value would return the instant value for the start of
+     * the five-minute window that contains the input instant.
+     *
+     * @param instant instant for which to evaluate the start of the containing window
+     * @param interval size of the window
+     * @param offset The window start offset. For example, a value of 'PT1m' would offset all windows by one minute.
+     * @return {@code null} if any input is {@code null}; otherwise, an {@link Instant} representing the start of the
+     *         window
+     */
+    @ScriptApi
+    @Nullable
+    public static Instant lowerBin(@Nullable final Instant instant, Duration interval, Duration offset) {
+        if (instant == null || interval == null || offset == null) {
+            return null;
+        }
+
+        return lowerBin(instant, interval.toNanos(), offset.toNanos());
+    }
+
+    /**
      * Returns a {@link ZonedDateTime} value, which is at the starting (lower) end of a time range defined by the
-     * interval nanoseconds. For example, a 5*MINUTE intervalNanos value would return the zoned date time value for the
-     * start of the five-minute window that contains the input zoned date time.
+     * interval nanoseconds. For example, a five-minute {@code intervalNanos} value would return the zoned date time
+     * value for the start of the five-minute window that contains the input zoned date time.
      *
      * @param dateTime zoned date time for which to evaluate the start of the containing window
-     * @param intervalNanos size of the window in nanoseconds * @param offset The window start offset in nanoseconds.
-     *        For example, a value of MINUTE would offset all windows by one minute.
-     * @return {@code null} if either input is {@code null}; otherwise, a {@link ZonedDateTime} representing the start
-     *         of the window
+     * @param intervalNanos size of the window in nanoseconds
+     * @param offset The window start offset in nanoseconds. For example, a value of MINUTE would offset all windows by
+     *        one minute.
+     * @return {@code null} if any input is {@code null}; otherwise, a {@link ZonedDateTime} representing the start of
+     *         the window
      */
     @ScriptApi
     @Nullable
@@ -2921,13 +4007,35 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns a {@link ZonedDateTime} value, which is at the starting (lower) end of a time range defined by the
+     * interval nanoseconds. For example, a five-minute {@code interval} intervalNanos value would return the zoned date
+     * time value for the start of the five-minute window that contains the input zoned date time.
+     *
+     * @param dateTime zoned date time for which to evaluate the start of the containing window
+     * @param interval size of the window
+     * @param offset The window start offset. For example, a value of MINUTE would offset all windows by one minute.
+     * @return {@code null} if any input is {@code null}; otherwise, a {@link ZonedDateTime} representing the start of
+     *         the window
+     */
+    @ScriptApi
+    @Nullable
+    public static ZonedDateTime lowerBin(@Nullable final ZonedDateTime dateTime, Duration interval, Duration offset) {
+        if (dateTime == null || interval == null || offset == null) {
+            return null;
+        }
+
+        return lowerBin(dateTime, interval.toNanos(), offset.toNanos());
+    }
+
+    /**
      * Returns an {@link Instant} value, which is at the ending (upper) end of a time range defined by the interval
-     * nanoseconds. For example, a 5*MINUTE intervalNanos value would return the instant value for the end of the
-     * five-minute window that contains the input instant.
+     * nanoseconds. For example, a five-minute {@code intervalNanos} value would return the instant value for the end of
+     * the five-minute window that contains the input instant.
      *
      * @param instant instant for which to evaluate the start of the containing window
-     * @param intervalNanos size of the window in nanoseconds * @return {@code null} if either input is {@code null};
-     *        otherwise, an {@link Instant} representing the end of the window
+     * @param intervalNanos size of the window in nanoseconds
+     * @return {@code null} if either input is {@code null}; otherwise, an {@link Instant} representing the end of the
+     *         window
      */
     @ScriptApi
     @Nullable
@@ -2940,13 +4048,34 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns an {@link Instant} value, which is at the ending (upper) end of a time range defined by the interval
+     * nanoseconds. For example, a five-minute {@code interval} value would return the instant value for the end of the
+     * five-minute window that contains the input instant.
+     *
+     * @param instant instant for which to evaluate the start of the containing window
+     * @param interval size of the window
+     * @return {@code null} if either input is {@code null}; otherwise, an {@link Instant} representing the end of the
+     *         window
+     */
+    @ScriptApi
+    @Nullable
+    public static Instant upperBin(@Nullable final Instant instant, Duration interval) {
+        if (instant == null || interval == null) {
+            return null;
+        }
+
+        return upperBin(instant, interval.toNanos());
+    }
+
+    /**
      * Returns a {@link ZonedDateTime} value, which is at the ending (upper) end of a time range defined by the interval
-     * nanoseconds. For example, a 5*MINUTE intervalNanos value would return the zoned date time value for the end of
-     * the five-minute window that contains the input zoned date time.
+     * nanoseconds. For example, a five-minute {@code intervalNanos} value would return the zoned date time value for
+     * the end of the five-minute window that contains the input zoned date time.
      *
      * @param dateTime zoned date time for which to evaluate the start of the containing window
-     * @param intervalNanos size of the window in nanoseconds * @return {@code null} if either input is {@code null};
-     *        otherwise, a {@link ZonedDateTime} representing the end of the window
+     * @param intervalNanos size of the window in nanoseconds
+     * @return {@code null} if either input is {@code null}; otherwise, a {@link ZonedDateTime} representing the end of
+     *         the window
      */
     @ScriptApi
     @Nullable
@@ -2959,14 +4088,35 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns a {@link ZonedDateTime} value, which is at the ending (upper) end of a time range defined by the interval
+     * nanoseconds. For example, a five-minute {@code interval} value would return the zoned date time value for the end
+     * of the five-minute window that contains the input zoned date time.
+     *
+     * @param dateTime zoned date time for which to evaluate the start of the containing window
+     * @param interval size of the window
+     * @return {@code null} if either input is {@code null}; otherwise, a {@link ZonedDateTime} representing the end of
+     *         the window
+     */
+    @ScriptApi
+    @Nullable
+    public static ZonedDateTime upperBin(@Nullable final ZonedDateTime dateTime, Duration interval) {
+        if (dateTime == null || interval == null) {
+            return null;
+        }
+
+        return upperBin(dateTime, interval.toNanos());
+    }
+
+    /**
      * Returns an {@link Instant} value, which is at the ending (upper) end of a time range defined by the interval
-     * nanoseconds. For example, a 5*MINUTE intervalNanos value would return the instant value for the end of the
-     * five-minute window that contains the input instant.
+     * nanoseconds. For example, a five-minute {@code intervalNanos} value would return the instant value for the end of
+     * the five-minute window that contains the input instant.
      *
      * @param instant instant for which to evaluate the start of the containing window
-     * @param intervalNanos size of the window in nanoseconds * @param offset The window start offset in nanoseconds.
-     *        For example, a value of MINUTE would offset all windows by one minute.
-     * @return {@code null} if either input is {@code null}; otherwise, an {@link Instant} representing the end of the
+     * @param intervalNanos size of the window in nanoseconds
+     * @param offset The window start offset in nanoseconds. For example, a value of MINUTE would offset all windows by
+     *        one minute.
+     * @return {@code null} if any input is {@code null}; otherwise, an {@link Instant} representing the end of the
      *         window
      */
     @ScriptApi
@@ -2981,15 +4131,37 @@ public class DateTimeUtils {
     }
 
     /**
+     * Returns an {@link Instant} value, which is at the ending (upper) end of a time range defined by the interval
+     * nanoseconds. For example, a five-minute {@code interval} value would return the instant value for the end of the
+     * five-minute window that contains the input instant.
+     *
+     * @param instant instant for which to evaluate the start of the containing window
+     * @param interval size of the window
+     * @param offset The window start offset. For example, a value of 'PT1m' would offset all windows by one minute.
+     * @return {@code null} if any input is {@code null}; otherwise, an {@link Instant} representing the end of the
+     *         window
+     */
+    @ScriptApi
+    @Nullable
+    public static Instant upperBin(@Nullable final Instant instant, Duration interval, Duration offset) {
+        if (instant == null || interval == null || offset == null) {
+            return null;
+        }
+
+        return upperBin(instant, interval.toNanos(), offset.toNanos());
+    }
+
+    /**
      * Returns a {@link ZonedDateTime} value, which is at the ending (upper) end of a time range defined by the interval
-     * nanoseconds. For example, a 5*MINUTE intervalNanos value would return the zoned date time value for the end of
-     * the five-minute window that contains the input zoned date time.
+     * nanoseconds. For example, a five-minute {@code intervalNanos} value would return the zoned date time value for
+     * the end of the five-minute window that contains the input zoned date time.
      *
      * @param dateTime zoned date time for which to evaluate the start of the containing window
-     * @param intervalNanos size of the window in nanoseconds * @param offset The window start offset in nanoseconds.
-     *        For example, a value of MINUTE would offset all windows by one minute.
-     * @return {@code null} if either input is {@code null}; otherwise, a {@link ZonedDateTime} representing the end of
-     *         the window
+     * @param intervalNanos size of the window in nanoseconds
+     * @param offset The window start offset in nanoseconds. For example, a value of MINUTE would offset all windows by
+     *        one minute.
+     * @return {@code null} if any input is {@code null}; otherwise, a {@link ZonedDateTime} representing the end of the
+     *         window
      */
     @ScriptApi
     @Nullable
@@ -3001,6 +4173,27 @@ public class DateTimeUtils {
 
         return epochNanosToZonedDateTime(Numeric.upperBin(epochNanos(dateTime) - offset, intervalNanos) + offset,
                 dateTime.getZone());
+    }
+
+    /**
+     * Returns a {@link ZonedDateTime} value, which is at the ending (upper) end of a time range defined by the interval
+     * nanoseconds. For example, a five-minute {@code interval} value would return the zoned date time value for the end
+     * of the five-minute window that contains the input zoned date time.
+     *
+     * @param dateTime zoned date time for which to evaluate the start of the containing window
+     * @param interval size of the window
+     * @param offset The window start offset. For example, a value of 'PT1m' would offset all windows by one minute.
+     * @return {@code null} if any input is {@code null}; otherwise, a {@link ZonedDateTime} representing the end of the
+     *         window
+     */
+    @ScriptApi
+    @Nullable
+    public static ZonedDateTime upperBin(@Nullable final ZonedDateTime dateTime, Duration interval, Duration offset) {
+        if (dateTime == null || interval == null || offset == null) {
+            return null;
+        }
+
+        return upperBin(dateTime, interval.toNanos(), offset.toNanos());
     }
 
     // endregion
@@ -3146,6 +4339,38 @@ public class DateTimeUtils {
         }
 
         return ISO_LOCAL_DATE.format(dateTime);
+    }
+
+    /**
+     * Returns a {@link LocalDateTime} formatted as a "yyyy-MM-dd" string.
+     *
+     * @param localDateTime local date time to format as a string
+     * @return {@code null} if either input is {@code null}; otherwise, the time formatted as a "yyyy-MM-dd" string
+     */
+    @ScriptApi
+    @Nullable
+    public static String formatDate(@Nullable final LocalDateTime localDateTime) {
+        if (localDateTime == null) {
+            return null;
+        }
+
+        return ISO_LOCAL_DATE.format(localDateTime);
+    }
+
+    /**
+     * Returns a {@link LocalDate} formatted as a "yyyy-MM-dd" string.
+     *
+     * @param localDate local date to format as a string
+     * @return {@code null} if either input is {@code null}; otherwise, the time formatted as a "yyyy-MM-dd" string
+     */
+    @ScriptApi
+    @Nullable
+    public static String formatDate(@Nullable final LocalDate localDate) {
+        if (localDate == null) {
+            return null;
+        }
+
+        return ISO_LOCAL_DATE.format(localDate);
     }
 
     // endregion
@@ -3390,7 +4615,7 @@ public class DateTimeUtils {
 
                 long sign1 = 0;
 
-                if (sign1Str == null || sign1Str.equals("") || sign1Str.equals("+")) {
+                if (sign1Str == null || sign1Str.isEmpty() || sign1Str.equals("+")) {
                     sign1 = 1;
                 } else if (sign1Str.equals("-")) {
                     sign1 = -1;
@@ -3400,7 +4625,7 @@ public class DateTimeUtils {
 
                 long sign2 = 0;
 
-                if (sign2Str == null || sign2Str.equals("") || sign2Str.equals("+")) {
+                if (sign2Str == null || sign2Str.isEmpty() || sign2Str.equals("+")) {
                     sign2 = 1;
                 } else if (sign2Str.equals("-")) {
                     sign2 = -1;
@@ -3493,6 +4718,11 @@ public class DateTimeUtils {
      */
     @ScriptApi
     public static long parseEpochNanos(@NotNull final String s) {
+        // noinspection ConstantConditions
+        if (s == null) {
+            throw new DateTimeParseException("Cannot parse epoch nanos (null): " + s);
+        }
+
         try {
             if (LONG_PATTERN.matcher(s).matches()) {
                 return epochAutoToEpochNanos(Long.parseLong(s));
@@ -3544,6 +4774,11 @@ public class DateTimeUtils {
     @ScriptApi
     @NotNull
     public static Instant parseInstant(@NotNull final String s) {
+        // noinspection ConstantConditions
+        if (s == null) {
+            throw new DateTimeParseException("Cannot parse instant (null): " + s);
+        }
+
         try {
             if (LONG_PATTERN.matcher(s).matches()) {
                 final long nanos = epochAutoToEpochNanos(Long.parseLong(s));
@@ -3577,6 +4812,65 @@ public class DateTimeUtils {
 
         try {
             return parseInstant(s);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Parses the string argument as a {@link LocalDateTime}.
+     * <p>
+     * Date time strings are formatted according to the ISO 8601 date time format
+     * {@code yyyy-MM-ddThh:mm:ss[.SSSSSSSSS]} and others.
+     *
+     * @param s date time string
+     * @return a {@link LocalDateTime} represented by the input string
+     * @throws DateTimeParseException if the string cannot be parsed
+     */
+    @ScriptApi
+    @NotNull
+    public static LocalDateTime parseLocalDateTime(@NotNull final String s) {
+        // noinspection ConstantConditions
+        if (s == null) {
+            throw new DateTimeParseException("Cannot parse local date time (null): " + s);
+        }
+
+        try {
+            return LocalDateTime.parse(s);
+        } catch (java.time.format.DateTimeParseException e) {
+            // ignore
+        }
+
+        try {
+            final Matcher dtMatcher = LOCAL_DATE_PATTERN.matcher(s);
+            if (dtMatcher.matches()) {
+                final String dateString = dtMatcher.group("date");
+                return LocalDate.parse(dateString, FORMATTER_ISO_LOCAL_DATE).atTime(LocalTime.of(0, 0));
+            }
+            return LocalDateTime.parse(s, FORMATTER_ISO_LOCAL_DATE_TIME);
+        } catch (Exception ex) {
+            throw new DateTimeParseException("Cannot parse local date time: " + s, ex);
+        }
+    }
+
+    /**
+     * Parses the string argument as a {@link LocalDateTime}.
+     * <p>
+     * Date time strings are formatted according to the ISO 8601 date time format
+     * {@code yyyy-MM-ddThh:mm:ss[.SSSSSSSSS]} and others.
+     *
+     * @param s date time string
+     * @return a {@link LocalDateTime} represented by the input string, or {@code null} if the string can not be parsed
+     */
+    @ScriptApi
+    @Nullable
+    public static LocalDateTime parseLocalDateTimeQuiet(@Nullable final String s) {
+        if (s == null || s.length() <= 1) {
+            return null;
+        }
+
+        try {
+            return parseLocalDateTime(s);
         } catch (Exception e) {
             return null;
         }
@@ -3812,7 +5106,7 @@ public class DateTimeUtils {
         try {
             return LocalTime.parse(s, FORMATTER_ISO_LOCAL_TIME);
         } catch (java.time.format.DateTimeParseException e) {
-            throw new DateTimeParseException("Cannot parse local date: " + s, e);
+            throw new DateTimeParseException("Cannot parse local time: " + s, e);
         }
     }
 

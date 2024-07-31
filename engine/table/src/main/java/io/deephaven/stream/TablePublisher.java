@@ -1,3 +1,6 @@
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.stream;
 
 import io.deephaven.engine.context.ExecutionContext;
@@ -5,6 +8,8 @@ import io.deephaven.engine.table.Table;
 import io.deephaven.engine.table.TableDefinition;
 import io.deephaven.engine.table.impl.sources.ArrayBackedColumnSource;
 import io.deephaven.engine.updategraph.UpdateGraph;
+import io.deephaven.engine.util.input.InputTableStatusListener;
+import io.deephaven.engine.util.input.InputTableUpdater;
 import io.deephaven.util.annotations.TestUseOnly;
 
 import javax.annotation.Nullable;
@@ -167,6 +172,29 @@ public class TablePublisher {
      */
     public boolean isAlive() {
         return adapter.isAlive();
+    }
+
+    /**
+     * Creates a new {@link Table#BLINK_TABLE_ATTRIBUTE blink table} with its {@link Table#getAttribute(String)
+     * attribute} {@value Table#INPUT_TABLE_ATTRIBUTE} set to an {@link InputTableUpdater} implementation based on
+     * {@code this}. The implementation's definition of "completed" with respect to {@link InputTableUpdater#add(Table)}
+     * and {@link InputTableUpdater#addAsync(Table, InputTableStatusListener)} matches the semantics provided by
+     * {@link #add(Table)} - that is, "completed" means that a snapshot of {@code newData} has been taken and handed
+     * off. The implementation does not implement {@link InputTableUpdater#delete(Table)} nor
+     * {@link InputTableUpdater#deleteAsync(Table, InputTableStatusListener)}.
+     *
+     * <p>
+     * May return {@code null} if invoked more than once and the initial caller does not enforce strong reachability of
+     * the result.
+     *
+     * @return the input-table blink table
+     */
+    public Table inputTable() {
+        final Table table = adapter.table();
+        if (table == null) {
+            return null;
+        }
+        return table.withAttributes(Map.of(Table.INPUT_TABLE_ATTRIBUTE, publisher.inputTableUpdater()));
     }
 
     @TestUseOnly

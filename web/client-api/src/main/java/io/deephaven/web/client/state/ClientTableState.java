@@ -1,6 +1,6 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.web.client.state;
 
 import elemental2.core.JsMap;
@@ -15,7 +15,6 @@ import io.deephaven.web.client.api.*;
 import io.deephaven.web.client.api.barrage.WebBarrageUtils;
 import io.deephaven.web.client.api.barrage.def.ColumnDefinition;
 import io.deephaven.web.client.api.barrage.def.InitialTableDefinition;
-import io.deephaven.web.client.api.barrage.def.TableAttributesDefinition;
 import io.deephaven.web.client.api.batch.TableConfig;
 import io.deephaven.web.client.api.filter.FilterCondition;
 import io.deephaven.web.client.api.lifecycle.HasLifecycle;
@@ -28,12 +27,8 @@ import io.deephaven.web.shared.fu.*;
 import jsinterop.base.Js;
 
 import java.util.*;
-import java.util.function.BinaryOperator;
-import java.util.function.Function;
-import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
-import static io.deephaven.web.client.api.barrage.WebBarrageUtils.keyValuePairs;
 import static io.deephaven.web.client.fu.JsItr.iterate;
 
 /**
@@ -138,6 +133,7 @@ public final class ClientTableState extends TableConfig {
     private long size;
     private InitialTableDefinition tableDef;
     private Column rowFormatColumn;
+    private boolean isStatic;
 
     /**
      * We maintain back-links to our source state.
@@ -250,13 +246,7 @@ public final class ClientTableState extends TableConfig {
 
         final ClientTableState newState = new ClientTableState(
                 connection, newHandle, sorts, conditions, filters, customColumns, dropColumns, viewColumns, this,
-                (c, s, metadata) -> {
-                    // This fetcher will not be used for the initial fetch, only for refetches.
-                    // Importantly, any CTS with a source (what we are creating here; source=this, above)
-                    // is revived, it does not use the refetcher; we directly rebuild batch operations instead.
-                    // It may make sense to actually have batches route through reviver instead.
-                    connection.getReviver().revive(metadata, s);
-                }, config.toSummaryString());
+                null, config.toSummaryString());
         newState.setFlat(config.isFlat());
         if (!isRunning()) {
             onFailed(reason -> newState.setResolution(ResolutionState.FAILED, reason), JsRunnable.doNothing());
@@ -283,6 +273,9 @@ public final class ClientTableState extends TableConfig {
             assert resolution == ResolutionState.RELEASED : "Trying to unrelease CTS " + this + " to " + resolution;
             return;
         }
+        if (this.resolution == resolution) {
+            return;
+        }
         this.resolution = resolution;
         if (resolution == ResolutionState.RUNNING) {
             if (onRunning != null) {
@@ -301,6 +294,8 @@ public final class ClientTableState extends TableConfig {
             // after a failure, we should discard onRunning (and this state entirely)
             onRunning = null;
             onReleased = null;
+
+            forActiveTables(t -> t.failureHandled(failMsg));
         } else if (resolution == ResolutionState.RELEASED) {
             if (onReleased != null) {
                 onReleased.forEach(JsRunnable::run);
@@ -985,6 +980,12 @@ public final class ClientTableState extends TableConfig {
     }
 
     public Promise<ClientTableState> refetch(HasEventHandling failHandler, BrowserHeaders metadata) {
+        if (fetch == null) {
+            if (failMsg != null) {
+                return Promise.reject(failMsg);
+            }
+            return Promise.resolve(this);
+        }
         final Promise<ExportedTableCreationResponse> promise =
                 Callbacks.grpcUnaryPromise(c -> fetch.fetch(c, this, metadata));
         // noinspection unchecked
@@ -1008,6 +1009,8 @@ public final class ClientTableState extends TableConfig {
         handle.setConnected(true);
 
         Uint8Array flightSchemaMessage = def.getSchemaHeader_asU8();
+        isStatic = def.getIsStatic();
+
         Schema schema = WebBarrageUtils.readSchemaMessage(flightSchemaMessage);
 
         setTableDef(WebBarrageUtils.readTableDefinition(schema));
@@ -1044,5 +1047,9 @@ public final class ClientTableState extends TableConfig {
 
     public String getFetchSummary() {
         return fetchSummary;
+    }
+
+    public boolean isStatic() {
+        return isStatic;
     }
 }

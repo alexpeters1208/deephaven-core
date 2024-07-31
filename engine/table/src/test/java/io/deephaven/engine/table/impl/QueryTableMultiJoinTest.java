@@ -1,8 +1,10 @@
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl;
 
 import gnu.trove.map.hash.TIntIntHashMap;
 import io.deephaven.chunk.util.pools.ChunkPoolReleaseTracking;
-import io.deephaven.datastructures.util.CollectionUtil;
 import io.deephaven.engine.context.ExecutionContext;
 import io.deephaven.engine.liveness.LivenessScopeStack;
 import io.deephaven.engine.rowset.RowSet;
@@ -16,6 +18,7 @@ import io.deephaven.engine.util.TableTools;
 import io.deephaven.test.types.OutOfBandTest;
 import io.deephaven.time.DateTimeUtils;
 import io.deephaven.util.SafeCloseable;
+import io.deephaven.util.type.ArrayTypeUtils;
 import org.apache.commons.lang3.mutable.MutableBoolean;
 import org.junit.*;
 import org.junit.experimental.categories.Category;
@@ -185,9 +188,9 @@ public class QueryTableMultiJoinTest extends QueryTableTestBase {
                 System.out.println("Size = " + size + ", seed =" + seed);
                 testStatic(DEFAULT_JOIN_CONTROL, size, seed, new String[] {"Key"}, new String[] {"Key2"});
                 testStatic(DEFAULT_JOIN_CONTROL, size, seed, new String[] {"Key", "Key2"},
-                        CollectionUtil.ZERO_LENGTH_STRING_ARRAY);
+                        ArrayTypeUtils.EMPTY_STRING_ARRAY);
                 testStatic(DEFAULT_JOIN_CONTROL, size, seed, new String[] {"Key", "Key2"},
-                        CollectionUtil.ZERO_LENGTH_STRING_ARRAY);
+                        ArrayTypeUtils.EMPTY_STRING_ARRAY);
             }
         }
     }
@@ -196,9 +199,9 @@ public class QueryTableMultiJoinTest extends QueryTableTestBase {
     public void testStaticOverflowAndRehash() {
         for (int size = 1000; size <= 100_000; size *= 10) {
             testStatic(HIGH_LOAD_JOIN_CONTROL, size, 0, new String[] {"Key", "Key2"},
-                    CollectionUtil.ZERO_LENGTH_STRING_ARRAY);
+                    ArrayTypeUtils.EMPTY_STRING_ARRAY);
             testStatic(REHASH_JOIN_CONTROL, size, 0, new String[] {"Key", "Key2"},
-                    CollectionUtil.ZERO_LENGTH_STRING_ARRAY);
+                    ArrayTypeUtils.EMPTY_STRING_ARRAY);
         }
     }
 
@@ -266,7 +269,7 @@ public class QueryTableMultiJoinTest extends QueryTableTestBase {
                     testIncremental(DEFAULT_JOIN_CONTROL, size, seed, maxSteps, new String[] {"Key"},
                             new String[] {"Key2"});
                     testIncremental(DEFAULT_JOIN_CONTROL, size, seed, maxSteps, new String[] {"Key", "Key2"},
-                            CollectionUtil.ZERO_LENGTH_STRING_ARRAY);
+                            ArrayTypeUtils.EMPTY_STRING_ARRAY);
                 }
             }
         }
@@ -298,7 +301,7 @@ public class QueryTableMultiJoinTest extends QueryTableTestBase {
                 testIncremental(HIGH_LOAD_JOIN_CONTROL, size, seedInitial, maxSteps, new String[] {"Key"},
                         new String[] {"Key2"});
                 testIncremental(REHASH_JOIN_CONTROL, size, seedInitial, maxSteps, new String[] {"Key", "Key2"},
-                        CollectionUtil.ZERO_LENGTH_STRING_ARRAY);
+                        ArrayTypeUtils.EMPTY_STRING_ARRAY);
             }
         }
     }
@@ -309,7 +312,7 @@ public class QueryTableMultiJoinTest extends QueryTableTestBase {
         for (int seed = 0; seed < seedCount; ++seed) {
             System.out.println("Zero Key, seed = " + seed);
             try (final SafeCloseable ignored = LivenessScopeStack.open()) {
-                testIncremental(DEFAULT_JOIN_CONTROL, 5, seed, 20, CollectionUtil.ZERO_LENGTH_STRING_ARRAY,
+                testIncremental(DEFAULT_JOIN_CONTROL, 5, seed, 20, ArrayTypeUtils.EMPTY_STRING_ARRAY,
                         new String[] {"Key", "Key2"});
             }
         }
@@ -539,9 +542,9 @@ public class QueryTableMultiJoinTest extends QueryTableTestBase {
             }
         }
 
-        final Table result = MultiJoinFactory.of(CollectionUtil.ZERO_LENGTH_STRING_ARRAY,
+        final Table result = MultiJoinFactory.of(ArrayTypeUtils.EMPTY_STRING_ARRAY,
                 inputTables.toArray(TableDefaults.ZERO_LENGTH_TABLE_ARRAY)).table();
-        final Table expected = doIterativeMultiJoin(CollectionUtil.ZERO_LENGTH_STRING_ARRAY, inputTables);
+        final Table expected = doIterativeMultiJoin(ArrayTypeUtils.EMPTY_STRING_ARRAY, inputTables);
 
         if (printTableUpdates()) {
             TableTools.showWithRowSet(result);

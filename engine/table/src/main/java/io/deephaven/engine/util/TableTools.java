@@ -1,13 +1,12 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.util;
 
 import io.deephaven.base.ClassUtil;
 import io.deephaven.base.Pair;
 import io.deephaven.base.clock.Clock;
 import io.deephaven.base.verify.Require;
-import io.deephaven.datastructures.util.CollectionUtil;
 import io.deephaven.engine.context.ExecutionContext;
 import io.deephaven.engine.exceptions.ArgumentException;
 import io.deephaven.engine.rowset.WritableRowSet;
@@ -1075,7 +1074,7 @@ public class TableTools {
                 columnsToRound.add(columnDefinition.getName());
             }
         }
-        return roundDecimalColumns(table, columnsToRound.toArray(CollectionUtil.ZERO_LENGTH_STRING_ARRAY));
+        return roundDecimalColumns(table, columnsToRound.toArray(String[]::new));
     }
 
     /**
@@ -1100,7 +1099,7 @@ public class TableTools {
                 columnsToRound.add(colName);
             }
         }
-        return roundDecimalColumns(table, columnsToRound.toArray(CollectionUtil.ZERO_LENGTH_STRING_ARRAY));
+        return roundDecimalColumns(table, columnsToRound.toArray(String[]::new));
     }
 
     /**
@@ -1124,7 +1123,7 @@ public class TableTools {
                 throw new IllegalArgumentException("Column \"" + colName + "\" is not a decimal column!");
             updateDescriptions.add(colName + "=round(" + colName + ')');
         }
-        return table.updateView(updateDescriptions.toArray(CollectionUtil.ZERO_LENGTH_STRING_ARRAY));
+        return table.updateView(updateDescriptions.toArray(String[]::new));
     }
 
     /**

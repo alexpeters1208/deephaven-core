@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+ * Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
  */
 #include "deephaven/client/utility/executor.h"
 
@@ -10,8 +10,6 @@
 #include <grpc/support/log.h>
 
 using deephaven::dhcore::utility::GetWhat;
-using deephaven::dhcore::utility::Streamf;
-using deephaven::dhcore::utility::Stringf;
 
 namespace deephaven::client::utility {
 std::shared_ptr<Executor> Executor::Create(std::string id) {
@@ -45,7 +43,7 @@ void Executor::Invoke(std::function<void()> f) {
   std::unique_lock guard(mutex_);
   auto needs_notify = todo_.empty();
   if (cancelled_) {
-    auto message = Stringf("Executor '%o' is cancelled: ignoring Invoke()\n", id_);
+    auto message = fmt::format("Executor '{}' is cancelled: ignoring Invoke()\n", id_);
     throw std::runtime_error(DEEPHAVEN_LOCATION_STR(message));
   }
   todo_.push_back(std::move(f));

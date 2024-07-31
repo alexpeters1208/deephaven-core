@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+/*
+ * Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
  */
 #pragma once
 
@@ -9,6 +9,9 @@
 #include <memory>
 #include <ostream>
 #include <set>
+
+#include "deephaven/third_party/fmt/format.h"
+#include "deephaven/third_party/fmt/ostream.h"
 
 namespace deephaven::dhcore::container {
 class RowSequenceIterator;
@@ -164,3 +167,6 @@ private:
   size_t size_ = 0;
 };
 }  // namespace deephaven::dhcore::container
+
+// Add the specialization for the RowSequence formatter
+template<> struct fmt::formatter<deephaven::dhcore::container::RowSequence> : fmt::ostream_formatter {};

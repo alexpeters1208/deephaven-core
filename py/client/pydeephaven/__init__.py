@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016-2023 Deephaven Data Labs and Patent Pending
+# Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
 #
 
 """Deephaven Python Client (`pydeephaven`) is a Python API built on top of Deephaven's highly efficient Open API which is
@@ -23,6 +23,8 @@ Examples:
     >>> session.close()
 """
 
+import importlib.metadata
+
 from .session import Session
 from .dherror import DHError
 from ._table_interface import SortDirection
@@ -35,4 +37,8 @@ except ImportError:
     pass
 
 __all__ = ["Session", "DHError", "SortDirection"]
-__version__ = "0.31.0"
+
+# Note: this is the _distribution_ name, not the _package_ name. Until 3.10, there is not an easy way to get the
+# distribution name from the package name.
+# https://docs.python.org/3/library/importlib.metadata.html#package-distributions
+__version__ = importlib.metadata.version('pydeephaven')

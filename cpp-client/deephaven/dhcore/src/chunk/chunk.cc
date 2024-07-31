@@ -1,17 +1,15 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+/*
+ * Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
  */
 #include "deephaven/dhcore/chunk/chunk.h"
 #include "deephaven/dhcore/utility/utility.h"
 
 using deephaven::dhcore::chunk::Chunk;
-using deephaven::dhcore::utility::separatedList;
-using deephaven::dhcore::utility::Stringf;
 
 namespace deephaven::dhcore::chunk {
 void Chunk::CheckSize(size_t proposed_size, std::string_view what) const {
   if (proposed_size > size_) {
-    auto message = Stringf("%o: new size > size (%o > %o)", what, proposed_size, size_);
+    auto message = fmt::format("{}: new size > size ({} > {})", what, proposed_size, size_);
     throw std::runtime_error(message);
   }
 }

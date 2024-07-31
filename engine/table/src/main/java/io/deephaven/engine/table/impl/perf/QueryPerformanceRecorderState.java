@@ -1,17 +1,16 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
- */
+//
+// Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
+//
 package io.deephaven.engine.table.impl.perf;
 
 import io.deephaven.chunk.util.pools.ChunkPoolInstrumentation;
 import io.deephaven.configuration.Configuration;
-import io.deephaven.datastructures.util.CollectionUtil;
 import io.deephaven.engine.updategraph.UpdateGraphLock;
 import io.deephaven.util.QueryConstants;
 import io.deephaven.util.SafeCloseable;
 import io.deephaven.util.function.ThrowingRunnable;
 import io.deephaven.util.profiling.ThreadProfiler;
-import org.apache.commons.lang3.mutable.MutableLong;
+import io.deephaven.util.mutable.MutableLong;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.BufferedReader;
@@ -66,7 +65,7 @@ public abstract class QueryPerformanceRecorderState {
             throw new UncheckedIOException("Error reading file " + propVal, e);
         }
 
-        PACKAGE_FILTERS = filters.toArray(CollectionUtil.ZERO_LENGTH_STRING_ARRAY);
+        PACKAGE_FILTERS = filters.toArray(String[]::new);
     }
 
     private QueryPerformanceRecorderState() {
@@ -119,14 +118,14 @@ public abstract class QueryPerformanceRecorderState {
      * @param operation The operation to record allocation for
      * @return The result of the operation.
      */
-    private static <RESULT_TYPE> RESULT_TYPE recordPoolAllocation(@NotNull final Supplier<RESULT_TYPE> operation) {
+    static <RESULT_TYPE> RESULT_TYPE recordPoolAllocation(@NotNull final Supplier<RESULT_TYPE> operation) {
         final long startThreadAllocatedBytes = ThreadProfiler.DEFAULT.getCurrentThreadAllocatedBytes();
         try {
             return operation.get();
         } finally {
             final long endThreadAllocatedBytes = ThreadProfiler.DEFAULT.getCurrentThreadAllocatedBytes();
             final MutableLong poolAllocatedBytesForCurrentThread = POOL_ALLOCATED_BYTES.get();
-            poolAllocatedBytesForCurrentThread.setValue(plus(poolAllocatedBytesForCurrentThread.longValue(),
+            poolAllocatedBytesForCurrentThread.set(plus(poolAllocatedBytesForCurrentThread.get(),
                     minus(endThreadAllocatedBytes, startThreadAllocatedBytes)));
         }
     }
@@ -138,7 +137,7 @@ public abstract class QueryPerformanceRecorderState {
      * @return The total bytes of pool-allocated memory attributed to this thread.
      */
     static long getPoolAllocatedBytesForCurrentThread() {
-        return POOL_ALLOCATED_BYTES.get().longValue();
+        return POOL_ALLOCATED_BYTES.get().get();
     }
 
     /**
@@ -203,6 +202,11 @@ public abstract class QueryPerformanceRecorderState {
 
         @Override
         public QueryPerformanceNugget getNugget(@NotNull final String name, long inputSize) {
+            return QueryPerformanceNugget.DUMMY_NUGGET;
+        }
+
+        @Override
+        public QueryPerformanceNugget getCompilationNugget(@NotNull final String name) {
             return QueryPerformanceNugget.DUMMY_NUGGET;
         }
 

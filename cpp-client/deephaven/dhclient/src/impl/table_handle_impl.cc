@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+ * Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
  */
 #include "deephaven/client/impl/table_handle_impl.h"
 
@@ -23,6 +23,8 @@
 #include "deephaven/dhcore/container/row_sequence.h"
 #include "deephaven/dhcore/ticking/ticking.h"
 #include "deephaven/dhcore/utility/utility.h"
+#include "deephaven/third_party/fmt/format.h"
+#include "deephaven/third_party/fmt/ranges.h"
 
 using io::deephaven::proto::backplane::grpc::AddTableRequest;
 using io::deephaven::proto::backplane::grpc::AddTableResponse;
@@ -58,7 +60,7 @@ using deephaven::client::impl::MoveVectorData;
 using deephaven::client::server::Server;
 using deephaven::client::subscription::SubscriptionThread;
 using deephaven::client::subscription::SubscriptionHandle;
-using deephaven::client::utility::ConvertTicketToFlightDescriptor;
+using deephaven::client::utility::ArrowUtil;
 using deephaven::client::utility::Executor;
 using deephaven::client::utility::OkOrThrow;
 using deephaven::client::utility::OkOrThrow;
@@ -77,8 +79,6 @@ using deephaven::dhcore::ticking::TickingUpdate;
 using deephaven::dhcore::utility::GetWhat;
 using deephaven::dhcore::utility::MakeReservedVector;
 using deephaven::dhcore::utility::separatedList;
-using deephaven::dhcore::utility::Streamf;
-using deephaven::dhcore::utility::Stringf;
 
 using UpdateByOperationProto = io::deephaven::proto::backplane::grpc::UpdateByRequest::UpdateByOperation;
 
@@ -276,11 +276,6 @@ std::shared_ptr<TableHandleImpl> TableHandleImpl::PercentileBy(double percentile
   descriptor.set_percentile(percentile);
   descriptor.set_avg_median(avg_median);
   return DefaultAggregateByDescriptor(std::move(descriptor), std::move(column_specs));
-}
-
-std::shared_ptr<TableHandleImpl> TableHandleImpl::PercentileBy(double percentile,
-    std::vector<std::string> column_specs) {
-  return PercentileBy(percentile, false, std::move(column_specs));
 }
 
 std::shared_ptr<TableHandleImpl> TableHandleImpl::CountBy(std::string count_by_column,
@@ -621,13 +616,12 @@ void TableHandleImpl::LookupHelper(const std::string &column_name,
     }
   }
 
-  auto render = [](std::ostream &s, ElementTypeId::Enum item) {
-    // TODO(kosak): render this as a human-readable string.
-    s << static_cast<int>(item);
-  };
-  auto message = Stringf("Column lookup for %o: Expected Arrow type: one of {%o}. Actual type %o",
-      column_name, separatedList(valid_types.begin(), valid_types.end(), ", ", render),
-      static_cast<int>(actual_type));
+  auto renderable_valid_types = MakeReservedVector<int32_t>(valid_types.size());
+  for (const auto &item : valid_types) {
+    renderable_valid_types.push_back(static_cast<int32_t>(item));
+  }
+  auto message = fmt::format("Column lookup for {}: Expected Arrow type: one of {{{}}}. Actual type {}",
+      column_name, renderable_valid_types, static_cast<int>(actual_type));
   throw std::runtime_error(DEEPHAVEN_LOCATION_STR(message));
 }
 
@@ -649,67 +643,6 @@ void TableHandleImpl::BindToVariable(std::string variable) {
     return server->ConsoleStub()->BindTableToVariable(ctx, req, &resp);
   });
 }
-
-namespace {
-struct ArrowToElementTypeId final : public arrow::TypeVisitor {
-  arrow::Status Visit(const arrow::Int8Type &/*type*/) final {
-    typeId_ = ElementTypeId::kInt8;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::Int16Type &/*type*/) final {
-    typeId_ = ElementTypeId::kInt16;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::Int32Type &/*type*/) final {
-    typeId_ = ElementTypeId::kInt32;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::Int64Type &/*type*/) final {
-    typeId_ = ElementTypeId::kInt64;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::FloatType &/*type*/) final {
-    typeId_ = ElementTypeId::kFloat;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::DoubleType &/*type*/) final {
-    typeId_ = ElementTypeId::kDouble;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::BooleanType &/*type*/) final {
-    typeId_ = ElementTypeId::kBool;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::UInt16Type &/*type*/) final {
-    typeId_ = ElementTypeId::kChar;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::StringType &/*type*/) final {
-    typeId_ = ElementTypeId::kString;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::TimestampType &/*type*/) final {
-    typeId_ = ElementTypeId::kTimestamp;
-    return arrow::Status::OK();
-  }
-
-  arrow::Status Visit(const arrow::ListType &/*type*/) final {
-    typeId_ = ElementTypeId::kList;
-    return arrow::Status::OK();
-  }
-
-  ElementTypeId::Enum typeId_ = ElementTypeId::kInt8;  // arbitrary initializer
-};
-}  // namespace
 
 std::shared_ptr<Schema> TableHandleImpl::Schema() {
   std::unique_lock guard(mutex_);
@@ -736,24 +669,14 @@ std::shared_ptr<Schema> TableHandleImpl::Schema() {
         }
     );
 
-    auto fd = ConvertTicketToFlightDescriptor(ticket_.ticket());
+    auto fd = ArrowUtil::ConvertTicketToFlightDescriptor(ticket_.ticket());
     auto gs_result = server->FlightClient()->GetSchema(options, fd);
     OkOrThrow(DEEPHAVEN_LOCATION_EXPR(gs_result));
 
     auto schema_result = (*gs_result)->GetSchema(nullptr);
-    OkOrThrow(DEEPHAVEN_LOCATION_EXPR(schema_result));
-
-    const auto &fields = (*schema_result)->fields();
-    auto names = MakeReservedVector<std::string>(fields.size());
-    auto types = MakeReservedVector<ElementTypeId::Enum>(fields.size());
-    for (const auto &f: fields) {
-      ArrowToElementTypeId v;
-      OkOrThrow(DEEPHAVEN_LOCATION_EXPR(f->type()->Accept(&v)));
-      names.push_back(f->name());
-      types.push_back(v.typeId_);
-    }
-    auto schema = Schema::Create(std::move(names), std::move(types));
-    schema_promise.set_value(std::move(schema));
+    auto arrow_schema = ValueOrThrow(DEEPHAVEN_LOCATION_EXPR(schema_result));
+    auto deephaven_schema = ArrowUtil::MakeDeephavenSchema(*arrow_schema);
+    schema_promise.set_value(std::move(deephaven_schema));
   } catch (...) {
     schema_promise.set_exception(std::current_exception());
   }

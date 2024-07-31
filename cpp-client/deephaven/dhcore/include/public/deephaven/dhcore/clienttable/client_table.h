@@ -1,5 +1,5 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+/*
+ * Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
  */
 #pragma once
 
@@ -9,6 +9,8 @@
 #include <vector>
 #include "deephaven/dhcore/column/column_source.h"
 #include "deephaven/dhcore/container/row_sequence.h"
+#include "deephaven/third_party/fmt/format.h"
+#include "deephaven/third_party/fmt/ostream.h"
 
 namespace deephaven::dhcore::clienttable {
 /**
@@ -161,3 +163,4 @@ public:
       std::vector<std::shared_ptr<RowSequence>> row_sequences) const;
 };
 }  // namespace deephaven::dhcore::clienttable
+

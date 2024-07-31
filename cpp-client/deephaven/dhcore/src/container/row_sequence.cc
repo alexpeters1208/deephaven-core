@@ -1,12 +1,11 @@
-/**
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+/*
+ * Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
  */
 #include "deephaven/dhcore/container/row_sequence.h"
 
 #include <optional>
 #include "deephaven/dhcore/utility/utility.h"
-
-using deephaven::dhcore::utility::Stringf;
+#include "deephaven/third_party/fmt/format.h"
 
 namespace deephaven::dhcore::container {
 namespace {
@@ -49,13 +48,12 @@ RowSequenceIterator RowSequence::GetRowSequenceIterator() const {
 
 std::ostream &operator<<(std::ostream &s, const RowSequence &o) {
   s << '[';
-  auto iter = o.GetRowSequenceIterator();
   const char *sep = "";
-  uint64_t item;
-  while (iter.TryGetNext(&item)) {
-    s << sep << item;
+  o.ForEachInterval([&](uint64_t start, uint64_t end) {
+    s << sep;
     sep = ", ";
-  }
+    s << '[' << start << ',' << end << ')';
+  });
   s << ']';
   return s;
 }
@@ -134,7 +132,7 @@ RowSequenceBuilder::~RowSequenceBuilder() = default;
 
 void RowSequenceBuilder::AddInterval(uint64_t begin, uint64_t end) {
   if (begin > end) {
-    auto message = Stringf("Malformed range [%o,%o)", begin, end);
+    auto message = fmt::format("Malformed range [{},{})", begin, end);
     throw std::runtime_error(DEEPHAVEN_LOCATION_STR(message));
   }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2022 Deephaven Data Labs and Patent Pending
+ * Copyright (c) 2016-2024 Deephaven Data Labs and Patent Pending
  */
 #include <cstdlib>
 #include <iostream>
@@ -16,7 +16,7 @@
 
 using deephaven::client::TableHandleManager;
 using deephaven::client::Client;
-using deephaven::client::utility::ConvertTicketToFlightDescriptor;
+using deephaven::client::utility::ArrowUtil;
 using deephaven::client::utility::OkOrThrow;
 using deephaven::client::utility::ValueOrThrow;
 
@@ -27,7 +27,7 @@ arrow::Status Doit(const TableHandleManager &manager, const std::string &csvfn);
 int main(int argc, char* argv[]) {
   const char *server = "localhost:10000";
   if (argc != 2 && argc != 3) {
-    std::cerr << "Usage: " << argv[0] << " [host:port] filename" << std::endl;
+    std::cerr << "Usage: " << argv[0] << " [host:port] filename\n";
     std::exit(1);
   }
   int c = 1;
@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
     auto manager = client.GetManager();
     auto st = Doit(manager, filename);
     if (!st.ok()) {
-      std::cerr << "Failed with status " << st << std::endl;
+      std::cerr << "Failed with status " << st << '\n';
     }
   } catch (const std::exception &e) {
     std::cerr << "Caught exception: " << e.what() << '\n';
@@ -73,32 +73,30 @@ arrow::Status Doit(const TableHandleManager &manager, const std::string &csvfn) 
   arrow::flight::FlightCallOptions options;
   wrapper.AddHeaders(&options);
 
-  auto fd = ConvertTicketToFlightDescriptor(ticket);
-  std::unique_ptr<arrow::flight::FlightStreamWriter> fsw;
-  std::unique_ptr<arrow::flight::FlightMetadataReader> fmr;
-  OkOrThrow(DEEPHAVEN_LOCATION_EXPR(
-      wrapper.FlightClient()->DoPut(options, fd, arrow_table->schema(), &fsw, &fmr)));
+  auto fd = ArrowUtil::ConvertTicketToFlightDescriptor(ticket);
+  auto res = wrapper.FlightClient()->DoPut(options, fd, arrow_table->schema());
+  OkOrThrow(DEEPHAVEN_LOCATION_EXPR(res));
 
-  const auto &srcColumns = arrow_table->columns();
-  const size_t ncols = srcColumns.size();
-  const size_t nchunks = srcColumns[0]->num_chunks();
-  std::vector<std::shared_ptr<arrow::Array>> destColumns(ncols);
-  for (size_t chunkIndex = 0; chunkIndex < nchunks; ++chunkIndex) {
-    for (size_t colIndex = 0; colIndex < ncols; ++colIndex) {
-      destColumns[colIndex] = srcColumns[colIndex]->chunk(chunkIndex);
+  const auto &src_columns = arrow_table->columns();
+  const size_t ncols = src_columns.size();
+  const int nchunks = src_columns[0]->num_chunks();
+  std::vector<std::shared_ptr<arrow::Array>> dest_columns(ncols);
+  for (int chunk_index = 0; chunk_index < nchunks; ++chunk_index) {
+    for (size_t col_index = 0; col_index < ncols; ++col_index) {
+      dest_columns[col_index] = src_columns[col_index]->chunk(chunk_index);
     }
-    auto batch = arrow::RecordBatch::Make(arrow_table->schema(), destColumns[0]->length(), destColumns);
-    OkOrThrow(DEEPHAVEN_LOCATION_EXPR(fsw->WriteRecordBatch(*batch)));
+    auto batch = arrow::RecordBatch::Make(arrow_table->schema(), dest_columns[0]->length(), dest_columns);
+    OkOrThrow(DEEPHAVEN_LOCATION_EXPR(res->writer->WriteRecordBatch(*batch)));
   }
 
-  OkOrThrow(DEEPHAVEN_LOCATION_EXPR(fsw->DoneWriting()));
+  OkOrThrow(DEEPHAVEN_LOCATION_EXPR(res->writer->DoneWriting()));
 
   std::shared_ptr<arrow::Buffer> buf;
-  OkOrThrow(DEEPHAVEN_LOCATION_EXPR(fmr->ReadMetadata(&buf)));
-  OkOrThrow(DEEPHAVEN_LOCATION_EXPR(fsw->Close()));
+  OkOrThrow(DEEPHAVEN_LOCATION_EXPR(res->reader->ReadMetadata(&buf)));
+  OkOrThrow(DEEPHAVEN_LOCATION_EXPR(res->writer->Close()));
 
   auto table_handle = manager.MakeTableHandleFromTicket(ticket);
-  std::cout << "table is:\n" << table_handle.Stream(true) << std::endl;
+  std::cout << "table is:\n" << table_handle.Stream(true) << '\n';
   table_handle.BindToVariable("showme");
   return arrow::Status::OK();
 }
